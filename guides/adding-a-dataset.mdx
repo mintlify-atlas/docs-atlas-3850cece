@@ -1,0 +1,461 @@
+---
+title: "Add a New Dataset to DSPy-Opt"
+sidebarTitle: "Adding a Dataset"
+description: "Extend DSPy-Opt to a new QA dataset by creating an indexing pipeline, RAG module, optimizer scripts, and config files following the established directory pattern."
+---
+
+DSPy-Opt is designed to be extended. Every dataset lives in its own self-contained subdirectory under `src/dspy_opt/` and follows a consistent file naming convention. Adding a new dataset means creating that directory, wiring up the shared utilities from `dspy_opt/utils/`, and providing YAML config files for each step. The FreshQA pipeline is the canonical reference — when in doubt, open a FreshQA file and adapt it.
+
+<Tip>
+  Run `make test` after adding a new dataset to verify that your pipeline integrates correctly with the shared test fixtures. `tests/conftest.py` provides mock stubs for Weaviate, SentenceTransformer, and all DSPy LM calls, so you can run the full test suite without live API credentials.
+</Tip>
+
+## Step-by-step Guide
+
+<Steps>
+
+  <Step title="Create the dataset directory">
+    Create a new subdirectory under `src/dspy_opt/` using your dataset name in lowercase with underscores:
+
+    ```bash
+    mkdir src/dspy_opt/my_dataset/
+    ```
+
+    The directory name becomes the Python package name and the prefix for all file names within it.
+  </Step>
+
+  <Step title="Add __init__.py">
+    Create an empty `__init__.py` to make the directory a Python package:
+
+    ```bash
+    touch src/dspy_opt/my_dataset/__init__.py
+    ```
+  </Step>
+
+  <Step title="Create the indexing script and config">
+    Create `my_dataset_indexing.py` following the FreshQA indexing pattern. The script loads a YAML config, fetches the dataset from HuggingFace, extracts metadata with `MetadataExtractor`, encodes documents with `SentenceTransformer`, and inserts them into a Weaviate collection.
+
+    ```python
+    """Index MyDataset for RAG."""
+
+    import os
+
+    import dspy
+    import weaviate
+    import weaviate.classes as wvc
+    import yaml
+    from datasets import load_dataset
+    from dotenv import load_dotenv
+    from sentence_transformers import SentenceTransformer
+
+    from dspy_opt.utils.metadata_extractor import MetadataExtractor
+
+    if __name__ == "__main__":
+        with open("my_dataset_indexing_config.yml", "r") as f:
+            config = yaml.safe_load(f)
+
+        load_dotenv()
+        WEAVIATE_URL = os.getenv("WEAVIATE_URL")
+        WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
+
+        dataset = load_dataset(
+            config["dataset"]["name"],
+            config["dataset"]["subset"],
+            split=config["dataset"]["split"],
+        )
+        # Adapt this line to match your dataset's text field structure
+        doc_texts = [example["text"] for example in dataset]
+        doc_examples = [dspy.Example(text=t, metadata={}) for t in doc_texts]
+
+        extractor_llm = dspy.LM(
+            model=config["extractor_llm"]["model"],
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+        metadata_extractor = MetadataExtractor(extractor_llm=extractor_llm)
+        doc_examples = metadata_extractor.transform_documents(
+            doc_examples, config["metadata_schema"]
+        )
+
+        model = SentenceTransformer(
+            config["embedding"]["embedding_model"],
+            tokenizer_kwargs=config["embedding"]["tokenizer_kwargs"],
+        )
+
+        client = weaviate.connect_to_weaviate_cloud(
+            cluster_url=WEAVIATE_URL,
+            auth_credentials=wvc.init.Auth.api_key(WEAVIATE_API_KEY),
+        )
+        collection_name = config["collection_name"]
+        if client.collections.exists(collection_name):
+            client.collections.delete(collection_name)
+        weaviate_collection = client.collections.create(
+            collection_name,
+            vector_config=wvc.config.Configure.Vectors.self_provided(),
+        )
+
+        embeddings = model.encode(
+            doc_texts,
+            batch_size=config["document_encoding"]["batch_size"],
+            show_progress_bar=config["document_encoding"]["show_progress_bar"],
+        )
+        question_objs = [
+            wvc.data.DataObject(
+                properties={"document_text": doc_text, **doc_example.metadata},
+                vector=embedding,
+            )
+            for embedding, doc_text, doc_example in zip(embeddings, doc_texts, doc_examples)
+        ]
+        weaviate_collection = client.collections.use(collection_name)
+        weaviate_collection.data.insert_many(question_objs)
+        client.close()
+    ```
+
+    Create the matching `my_dataset_indexing_config.yml`:
+
+    ```yaml
+    embedding:
+      embedding_model: "Qwen/Qwen3-Embedding-0.6B"
+      tokenizer_kwargs:
+        padding_side: "left"
+
+    dataset:
+      name: "organization/my_dataset"   # HuggingFace dataset ID
+      subset: "default"
+      split: "train"
+
+    metadata_schema:
+      properties:
+        title:
+          type: "string"
+          description: "The main title or name of the subject"
+        category:
+          type: "string"
+          description: "Primary category or type of content"
+
+    extractor_llm:
+      model: "groq/llama-3.3-70b-versatile"
+
+    collection_name: "MyDataset"
+
+    document_encoding:
+      batch_size: 16
+      show_progress_bar: true
+    ```
+  </Step>
+
+  <Step title="Create the RAG module">
+    Create `my_dataset_rag_module.py`. This is the core pipeline class. Subclass `dspy.Module`, define a `dspy.Signature` that declares your input and output fields, and compose the shared utilities in `forward()`.
+
+    ```python
+    """MyDataset RAG Pipeline using DSPy framework."""
+
+    from typing import Any, Dict
+
+    import dspy
+    from sentence_transformers import SentenceTransformer
+
+    from dspy_opt.utils.metadata_extractor import MetadataExtractor
+    from dspy_opt.utils.query_rewriter import QueryRewriter
+    from dspy_opt.utils.sub_query_generator import SubQueryGenerator
+    from dspy_opt.utils.weaviate_retriever import WeaviateRetriever
+
+
+    class MyDatasetAnswerSignature(dspy.Signature):
+        """Signature for generating answers to MyDataset questions."""
+
+        context = dspy.InputField(desc="List of relevant passages from the knowledge base")
+        question = dspy.InputField(desc="The original question to be answered")
+        answer = dspy.OutputField(desc="Concise and accurate answer to the question")
+        reasoning = dspy.OutputField(desc="Brief explanation of how the answer was derived")
+
+
+    class MyDatasetRAG(dspy.Module):
+        """Complete MyDataset RAG pipeline using DSPy framework."""
+
+        def __init__(
+            self,
+            query_rewriter: QueryRewriter,
+            sub_query_generator: SubQueryGenerator,
+            metadata_extractor: MetadataExtractor,
+            metadata_schema: Dict[str, Any],
+            weaviate_retriever: WeaviateRetriever,
+            embedding_model: SentenceTransformer,
+            top_k: int = 3,
+        ):
+            super().__init__()
+            self.query_rewriter = query_rewriter
+            self.sub_query_generator = sub_query_generator
+            self.metadata_extractor = metadata_extractor
+            self.metadata_schema = metadata_schema
+            self.retriever = weaviate_retriever
+            self.embedding_model = embedding_model
+            self.top_k = top_k
+            self.generate_answer = dspy.ChainOfThought(MyDatasetAnswerSignature)
+
+        def forward(self, question: str) -> dspy.Prediction:
+            """Execute the complete RAG pipeline."""
+            # Rewrite the query
+            rewritten_query = self.query_rewriter(question).rewritten_query
+
+            # Generate sub-queries
+            sub_queries = self.sub_query_generator(rewritten_query).sub_queries
+
+            # Extract metadata for filtering
+            rewritten_query_metadata = self.metadata_extractor(
+                rewritten_query, self.metadata_schema
+            )
+            sub_queries_metadata = [
+                self.metadata_extractor(sq, self.metadata_schema) for sq in sub_queries
+            ]
+
+            # Retrieve passages for each query
+            all_passages = []
+            main_retrieval = self.retriever(
+                query=rewritten_query,
+                query_embedding=self.embedding_model.encode(rewritten_query),
+                top_k=self.top_k,
+                metadata=rewritten_query_metadata,
+            )
+            all_passages.extend(main_retrieval.passages)
+
+            for sub_query, sub_metadata in zip(sub_queries, sub_queries_metadata):
+                sub_retrieval = self.retriever(
+                    query=sub_query,
+                    query_embedding=self.embedding_model.encode(sub_query),
+                    top_k=self.top_k,
+                    metadata=sub_metadata,
+                )
+                all_passages.extend(sub_retrieval.passages)
+
+            unique_passages = list(dict.fromkeys(all_passages))
+            if not unique_passages:
+                unique_passages = ["No relevant context found in the knowledge base."]
+
+            answer_result = self.generate_answer(
+                context=unique_passages, question=question
+            )
+
+            return dspy.Prediction(
+                question=question,
+                rewritten_query=rewritten_query,
+                sub_queries=sub_queries,
+                retrieved_context=unique_passages,
+                answer=answer_result.answer,
+                reasoning=answer_result.reasoning,
+            )
+    ```
+
+    **What to customise:**
+    - **Class names**: rename `MyDatasetAnswerSignature` and `MyDatasetRAG` to match your dataset.
+    - **Signature fields**: adjust `InputField` and `OutputField` descriptors to match your task. For multi-hop datasets you may want to expose `rewritten_query` and `sub_queries` as output fields (see `FreshQAAnswerSignature` for reference).
+    - **Document text extraction**: the `doc_texts` extraction in the indexing script must match your dataset's schema (e.g. `example["context"]` for HotpotQA).
+  </Step>
+
+  <Step title="Create optimizer scripts and configs">
+    Create one script and one config file per optimizer. All five scripts follow the same pattern — the only differences are the optimizer class, its constructor arguments, and the output JSON filename.
+
+    For each optimizer (`mipro`, `copro`, `simba`, `gepa`, `bootstrap_few_shot`) create:
+    - `my_dataset_rag_<optimizer>.py`
+    - `my_dataset_rag_<optimizer>_config.yml`
+
+    The optimizer script pattern (shown for MIPROv2):
+
+    ```python
+    """Optimized MyDataset RAG Pipeline using the MIPROv2 optimizer."""
+
+    import os
+
+    import dspy
+    import yaml
+    from datasets import load_dataset
+    from deepeval.metrics import (
+        AnswerRelevancyMetric,
+        ContextualPrecisionMetric,
+        ContextualRecallMetric,
+        ContextualRelevancyMetric,
+        FaithfulnessMetric,
+    )
+    from deepeval.models import LocalModel
+    from dotenv import load_dotenv
+    from sentence_transformers import SentenceTransformer
+
+    from dspy_opt.my_dataset.my_dataset_rag_module import MyDatasetRAG
+    from dspy_opt.utils.metadata_extractor import MetadataExtractor
+    from dspy_opt.utils.metrics import create_metrics_function
+    from dspy_opt.utils.query_rewriter import QueryRewriter
+    from dspy_opt.utils.sub_query_generator import SubQueryGenerator
+    from dspy_opt.utils.weaviate_retriever import WeaviateRetriever
+
+
+    def main() -> None:
+        with open("my_dataset_rag_mipro_config.yml", "r") as f:
+            config = yaml.safe_load(f)
+
+        load_dotenv()
+        weaviate_url = os.getenv("WEAVIATE_URL")
+        weaviate_api_key = os.getenv("WEAVIATE_API_KEY")
+
+        answer_llm = dspy.LM(
+            model=config["answer_llm"]["model"],
+            api_key=os.getenv(config["answer_llm"]["api_key_env"]),
+        )
+        dspy.configure(lm=answer_llm)
+        extractor_llm = dspy.LM(
+            model=config["extractor_llm"]["model"],
+            api_key=os.getenv(config["extractor_llm"]["api_key_env"]),
+        )
+
+        model = SentenceTransformer(
+            config["embedding"]["model"],
+            tokenizer_kwargs=config["embedding"]["tokenizer_kwargs"],
+        )
+
+        query_rewriter = QueryRewriter()
+        sub_query_generator = SubQueryGenerator()
+        metadata_extractor = MetadataExtractor(extractor_llm=extractor_llm)
+
+        weaviate_retriever = WeaviateRetriever(
+            weaviate_url=weaviate_url,
+            weaviate_api_key=weaviate_api_key,
+            collection_name=config["weaviate"]["collection_name"],
+            top_k=config["weaviate"]["top_k"],
+            metadata_schema=config["metadata_schema"],
+        )
+
+        rag_pipeline = MyDatasetRAG(
+            query_rewriter=query_rewriter,
+            sub_query_generator=sub_query_generator,
+            metadata_extractor=metadata_extractor,
+            metadata_schema=config["metadata_schema"],
+            weaviate_retriever=weaviate_retriever,
+            embedding_model=model,
+            top_k=config["rag_pipeline"]["top_k"],
+        )
+
+        evaluator_llm = LocalModel(
+            model=config["evaluation"]["evaluator_llm"]["model"],
+            api_key=os.getenv(config["evaluation"]["evaluator_llm"]["api_key_env"]),
+            base_url=config["evaluation"]["evaluator_llm"]["base_url"],
+        )
+        metrics = [
+            AnswerRelevancyMetric(model=evaluator_llm, **config["evaluation"]["metrics"]["answer_relevancy"]),
+            ContextualPrecisionMetric(model=evaluator_llm, **config["evaluation"]["metrics"]["contextual_precision"]),
+            ContextualRecallMetric(model=evaluator_llm, **config["evaluation"]["metrics"]["contextual_recall"]),
+            ContextualRelevancyMetric(model=evaluator_llm, **config["evaluation"]["metrics"]["contextual_relevancy"]),
+            FaithfulnessMetric(model=evaluator_llm, **config["evaluation"]["metrics"]["faithfulness"]),
+        ]
+        metrics_function = create_metrics_function(metrics)
+
+        dataset = load_dataset(
+            config["dataset"]["name"],
+            config["dataset"]["subset"],
+            split=config["dataset"]["split"],
+        )
+        dataset = dataset.train_test_split(test_size=config["dataset"]["test_size"])
+        trainset = [
+            dspy.Example(question=q, answer=a).with_inputs("question")
+            for q, a in zip(dataset["train"]["question"], dataset["train"]["answer"])
+        ]
+        testset = [
+            dspy.Example(question=q, answer=a).with_inputs("question")
+            for q, a in zip(dataset["test"]["question"], dataset["test"]["answer"])
+        ]
+
+        optimizer = dspy.MIPROv2(
+            metric=metrics_function,
+            max_bootstrapped_demos=config["optimizer"]["max_bootstrapped_demos"],
+            max_labeled_demos=config["optimizer"]["max_labeled_demos"],
+            auto=config["optimizer"]["auto"],
+        )
+        optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+        optimized_rag.save("optimized_rag_mipro.json")
+
+        evaluate = dspy.Evaluate(
+            devset=testset,
+            num_threads=config["evaluation"]["settings"]["num_threads"],
+            display_progress=config["evaluation"]["settings"]["display_progress"],
+            display_table=config["evaluation"]["settings"]["display_table"],
+            provide_traceback=config["evaluation"]["settings"]["provide_traceback"],
+        )
+        results = evaluate(optimized_rag, metric=metrics_function)
+        print(results)
+
+
+    if __name__ == "__main__":
+        main()
+    ```
+
+    For GEPA, import `create_gepa_metrics_function` instead of `create_metrics_function` and use `dspy.GEPA` with the `reflection_llm` argument. See the [Running Optimizers](/guides/running-optimizers) guide for details.
+  </Step>
+
+  <Step title="Create the evaluation script and config">
+    Create `my_dataset_rag_evaluation.py` and `my_dataset_rag_evaluation_config.yml`. The evaluation script has the same structure as an optimizer script but skips the `optimizer.compile()` step — it simply instantiates the pipeline and runs `dspy.Evaluate` directly. This is useful for benchmarking the unoptimized baseline or re-evaluating a previously saved compiled pipeline.
+
+    The evaluation config has the same structure as an optimizer config but omits the `optimizer` section.
+  </Step>
+
+  <Step title="Add a README.md">
+    Create `src/dspy_opt/my_dataset/README.md` following the `freshqa/README.md` template. At a minimum, include:
+
+    - Dataset name, HuggingFace link, and a one-paragraph description.
+    - The metadata schema fields and their purpose.
+    - Commands for indexing, running each optimizer, and evaluation.
+    - A description of any dataset-specific adaptations made to the standard pipeline.
+  </Step>
+
+</Steps>
+
+## File Checklist
+
+Once complete, your dataset directory should contain these files:
+
+```text
+src/dspy_opt/my_dataset/
+├── __init__.py
+├── README.md
+├── my_dataset_indexing.py
+├── my_dataset_indexing_config.yml
+├── my_dataset_rag_module.py
+├── my_dataset_rag_mipro.py
+├── my_dataset_rag_mipro_config.yml
+├── my_dataset_rag_copro.py
+├── my_dataset_rag_copro_config.yml
+├── my_dataset_rag_simba.py
+├── my_dataset_rag_simba_config.yml
+├── my_dataset_rag_gepa.py
+├── my_dataset_rag_gepa_config.yml
+├── my_dataset_rag_bootstrap_few_shot.py
+├── my_dataset_rag_bootstrap_few_shot_config.yml
+├── my_dataset_rag_evaluation.py
+└── my_dataset_rag_evaluation_config.yml
+```
+
+## Key Adaptation Points
+
+| File | What to change |
+|---|---|
+| `*_rag_module.py` | Class names, `Signature` field descriptors, any dataset-specific output fields |
+| `*_indexing.py` | `doc_texts` extraction logic to match your dataset's field names |
+| `*_indexing_config.yml` | `dataset.name`, `dataset.subset`, `dataset.split`, `collection_name`, `metadata_schema` |
+| `*_rag_*_config.yml` | `dataset.*`, `weaviate.collection_name`, `optimizer.*` hyperparameters |
+| All optimizer scripts | Import path (`from dspy_opt.my_dataset.my_dataset_rag_module import MyDatasetRAG`) |
+
+## Running the New Pipeline
+
+After creating all files, run the steps in order:
+
+```bash
+# 1. Index documents into Weaviate
+cd src/dspy_opt/my_dataset
+python my_dataset_indexing.py
+
+# 2. Run an optimizer (e.g. MIPROv2)
+python my_dataset_rag_mipro.py
+
+# 3. Evaluate the baseline (no optimization)
+python my_dataset_rag_evaluation.py
+
+# 4. Run the test suite to verify integration
+cd ../../..   # return to project root
+make test
+```

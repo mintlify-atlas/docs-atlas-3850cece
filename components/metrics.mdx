@@ -1,0 +1,142 @@
+---
+title: "DeepEval Metrics Integration for DSPy Optimization"
+sidebarTitle: "Metrics"
+description: "The metrics module wraps DeepEval evaluation metrics into DSPy-compatible functions for use as optimization objectives with MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot."
+---
+
+The `metrics` module bridges the [DeepEval](https://deepeval.com/) evaluation library and the DSPy optimizer loop. DSPy optimizers require a callable metric function with a specific signature; DeepEval provides rich, LLM-graded RAG metrics. This module provides two factory functions that wrap any list of `BaseMetric` instances into the exact shape each optimizer expects — one returning a plain `float` for most optimizers and one returning a `dspy.Prediction` with score and feedback text for GEPA.
+
+## Supported DeepEval metrics
+
+The following DeepEval metrics work directly with both factory functions:
+
+<CardGroup cols={2}>
+  <Card title="AnswerRelevancyMetric" icon="bullseye">
+    Measures whether the generated answer is relevant to the input question.
+  </Card>
+  <Card title="FaithfulnessMetric" icon="shield-check">
+    Checks whether the answer is grounded in the retrieved context without hallucination.
+  </Card>
+  <Card title="ContextualPrecisionMetric" icon="filter">
+    Evaluates whether retrieved passages that are relevant are ranked above irrelevant ones.
+  </Card>
+  <Card title="ContextualRecallMetric" icon="magnifying-glass">
+    Measures how much of the ground-truth answer is covered by the retrieved context.
+  </Card>
+  <Card title="ContextualRelevancyMetric" icon="link">
+    Assesses whether the retrieved context is relevant to the question overall.
+  </Card>
+</CardGroup>
+
+## Expected data shape
+
+Both inner metric functions read attributes from `gold` and `pred` using `getattr` with safe defaults:
+
+| Attribute | Source object | Description |
+|---|---|---|
+| `question` | `gold` | The original input question |
+| `answer` | `gold` | The ground-truth reference answer |
+| `answer` | `pred` | The LLM's generated answer |
+| `retrieved_context` | `pred` | `List[str]` of retrieved passage strings |
+
+These are assembled into a `deepeval.test_case.LLMTestCase` and evaluated synchronously.
+
+## `create_metrics_function`
+
+```python
+create_metrics_function(metrics: List[BaseMetric]) -> Callable[[Any, Any], float]
+```
+
+Factory that returns a `deepeval_metrics(gold, pred, trace=None) -> float` function. Use this with **MIPROv2, COPRO, BootstrapFewShotWithRandomSearch, and SIMBA** — all optimizers that expect a metric returning a single numeric score.
+
+<ParamField path="metrics" type="List[BaseMetric]" required>
+  A list of instantiated DeepEval metric objects (e.g. `AnswerRelevancyMetric`, `FaithfulnessMetric`). All metrics in the list are evaluated on every call, and their scores are averaged into a single `float` rounded to two decimal places.
+</ParamField>
+
+**Returns:** A `Callable[[Any, Any, Optional[bool]], float]` with the inner signature:
+
+```python
+def deepeval_metrics(gold: Any, pred: Any, trace: Optional[bool] = None) -> float
+```
+
+**Score aggregation:** After running `evaluate()`, the function collects each metric's score by name and computes `round(sum(scores.values()) / len(scores), 2)`. If no scores were collected (e.g. evaluation error), it returns `0.0`.
+
+---
+
+## `create_gepa_metrics_function`
+
+```python
+create_gepa_metrics_function(metrics: List[BaseMetric]) -> Callable[..., dspy.Prediction]
+```
+
+Factory that returns a metrics function specifically shaped for the **GEPA** optimizer. GEPA uses a reflection LLM to propose improved prompt instructions based on per-sample feedback; it therefore requires the metric function to return a `dspy.Prediction` containing both a numeric score and a human-readable feedback string.
+
+<ParamField path="metrics" type="List[BaseMetric]" required>
+  A list of instantiated DeepEval metric objects. All metrics are evaluated and their individual scores are included in the feedback string.
+</ParamField>
+
+**Returns:** A callable with the inner signature:
+
+```python
+def deepeval_metrics(
+    gold: Any,
+    pred: Any,
+    trace: Optional[bool] = None,
+    pred_name: Optional[str] = None,
+    pred_trace: Optional[str] = None,
+) -> dspy.Prediction
+```
+
+The returned `dspy.Prediction` has two fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `score` | `float` | Averaged score across all metrics, rounded to two decimal places |
+| `feedback` | `str` | Comma-separated `"MetricName: score"` pairs, e.g. `"AnswerRelevancy: 0.8, Faithfulness: 0.6"` |
+
+GEPA's reflection LLM reads the `feedback` string to diagnose which metrics underperformed and proposes updated prompt instructions for the next optimization round.
+
+<Note>
+  Both factory functions call `evaluate()` with `AsyncConfig(run_async=False, throttle_value=60, max_concurrent=1)`. Async execution is intentionally disabled to avoid rate-limit errors when many test cases are evaluated in rapid succession during an optimization run. The `throttle_value=60` introduces a 60-second inter-request pause when rate limits are approached.
+</Note>
+
+## Usage
+
+```python
+from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
+from deepeval.models import LocalModel
+from dspy_opt.utils.metrics import create_metrics_function, create_gepa_metrics_function
+
+# Use a dedicated evaluator LLM (separate from your answer LLM)
+evaluator_llm = LocalModel(
+    model="groq/qwen3-32b",
+    api_key="your-groq-api-key",
+    base_url="https://api.groq.com/openai/v1",
+)
+
+metrics = [
+    AnswerRelevancyMetric(model=evaluator_llm, threshold=0.8, async_mode=False),
+    FaithfulnessMetric(model=evaluator_llm, threshold=0.5, async_mode=False),
+]
+
+# --- For MIPROv2, COPRO, SIMBA, BootstrapFewShot ---
+metrics_function = create_metrics_function(metrics)
+
+# Plug directly into dspy.Evaluate or an optimizer
+import dspy
+evaluator = dspy.Evaluate(devset=devset, metric=metrics_function, num_threads=1)
+score = evaluator(my_rag_pipeline)
+
+optimizer = dspy.MIPROv2(metric=metrics_function, auto="medium")
+compiled_pipeline = optimizer.compile(my_rag_pipeline, trainset=trainset)
+
+# --- For GEPA ---
+gepa_metrics_function = create_gepa_metrics_function(metrics)
+
+gepa_optimizer = dspy.GEPA(metric=gepa_metrics_function)
+compiled_pipeline = gepa_optimizer.compile(my_rag_pipeline, trainset=trainset)
+```
+
+<Tip>
+  Always set `async_mode=False` on every DeepEval metric you pass to these factories. The evaluation loop inside the factory functions is already synchronous; mixing in async metrics can cause event-loop conflicts.
+</Tip>

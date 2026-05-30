@@ -1,0 +1,149 @@
+---
+title: "SubQueryGenerator: Decompose Complex Queries"
+sidebarTitle: "SubQueryGenerator"
+description: "SubQueryGenerator splits complex user queries into 2–5 focused sub-queries for parallel retrieval, automatically determining decomposition depth from query complexity."
+---
+
+`SubQueryGenerator` is a `dspy.Module` that tackles multi-faceted questions by splitting them into several focused sub-queries, each designed for independent retrieval execution. Rather than sending a long, ambiguous question directly to the search layer, the generator identifies distinct aspects, comparisons, and constraints within the original query and produces a JSON array of targeted sub-queries — one for each retrievable concept. The module automatically estimates how many sub-queries are needed based on linguistic heuristics and then uses `dspy.ChainOfThought` to produce them.
+
+## Signature
+
+The module is driven by `SubQuerySignature`, which defines the three fields passed to the LLM:
+
+| Field | Type | Description |
+|---|---|---|
+| `original_query` | `InputField` | The user's original complex search query. The LLM must identify distinct aspects, entities, and constraints that each warrant a separate search. |
+| `num_subqueries` | `InputField` | Target number of sub-queries to generate (typically 2–5). Scaled by complexity: 2 for simple, 3 for medium, 4–5 for highly complex queries. |
+| `sub_queries` | `OutputField` | A JSON array of optimized sub-query strings. Each must be self-contained, address a distinct aspect of the original query, preserve all critical constraints, and be 5–12 words long. Output must be valid JSON with no additional text. |
+
+## Constructor
+
+```python
+SubQueryGenerator(min_subqueries: int = 2, max_subqueries: int = 5)
+```
+
+<ParamField path="min_subqueries" type="int" default="2">
+  Minimum number of sub-queries to generate. If the LLM produces fewer than this threshold, the module falls back to a single expanded query derived from the original. Internally clamped to `min(2, min_subqueries)`.
+</ParamField>
+
+<ParamField path="max_subqueries" type="int" default="5">
+  Maximum number of sub-queries to generate. Any excess sub-queries from the LLM output are truncated. Internally clamped to `max(5, max_subqueries)`.
+</ParamField>
+
+## Methods
+
+### `forward`
+
+```python
+forward(query: str, num_subqueries: Optional[int] = None) -> dspy.Prediction
+```
+
+Decomposes a single query into targeted sub-queries.
+
+<ParamField path="query" type="str" required>
+  The original complex search query to decompose.
+</ParamField>
+
+<ParamField path="num_subqueries" type="int">
+  Optional override for the number of sub-queries to generate. When omitted, the count is determined automatically by `_determine_complexity`. The value is always clamped to `[min_subqueries, max_subqueries]`.
+</ParamField>
+
+**Returns:** `dspy.Prediction` containing:
+- `sub_queries` — `List[str]` of optimized sub-query strings
+- `rationale` — the reasoning steps used to decompose the query (from `dspy.ChainOfThought`)
+
+---
+
+### `batch_generate`
+
+```python
+batch_generate(queries: List[str]) -> List[List[str]]
+```
+
+Generates sub-queries for a list of complex queries by calling `forward` on each.
+
+<ParamField path="queries" type="List[str]" required>
+  A list of complex search queries to decompose.
+</ParamField>
+
+**Returns:** `List[List[str]]` — a list of sub-query lists, one per input query.
+
+---
+
+### `_determine_complexity`
+
+```python
+_determine_complexity(query: str) -> int
+```
+
+Internal heuristic that estimates how many sub-queries the LLM should produce. The score starts at 1 and increments for each of the following signals found in the query:
+
+| Signal | Check |
+|---|---|
+| Comparison language | `"compare"`, `"versus"`, `"vs"`, `"difference"` present |
+| Conjunction language | `"and"`, `"&"`, `"also"` present |
+| Query length | More than 10 words |
+| List punctuation | `:`, `;`, or `,` present |
+
+The raw complexity score is then clamped to `[min_subqueries, max_subqueries]`.
+
+## Error handling
+
+`SubQueryGenerator` is designed to never crash the pipeline:
+
+<Steps>
+  <Step title="LLM call succeeds, output is valid JSON list of strings">
+    Normal path — sub-queries are returned, truncated to `max_subqueries` if needed.
+  </Step>
+  <Step title="LLM call succeeds, but fewer sub-queries than min_subqueries">
+    Falls back to a single expanded query produced by `_fallback_rewrite`, which strips conversational stop-words (`"how"`, `"what"`, `"why"`, `"i"`, `"me"`, `"my"`) from the original.
+  </Step>
+  <Step title="Any exception (JSON parse error, LLM error, etc.)">
+    Catches the exception and returns a `dspy.Prediction` with the fallback-rewritten query as the sole sub-query, with `rationale` describing the error.
+  </Step>
+</Steps>
+
+## Usage
+
+```python
+from dspy_opt.utils.sub_query_generator import SubQueryGenerator
+
+generator = SubQueryGenerator()
+
+# Automatic complexity detection
+result = generator("Compare renewable energy adoption in Germany vs France since 2020")
+print(result.sub_queries)
+# ["Germany renewable energy economic impact 2020-2024",
+#  "France renewable energy economic impact 2020-2024",
+#  "Germany France renewable energy comparison 2020-2024"]
+
+print(result.rationale)
+# "The query compares two countries across a time window, so I generated
+#  one sub-query per country and one comparative sub-query."
+
+# Override the sub-query count explicitly
+result = generator(
+    "What are the health effects of air pollution?",
+    num_subqueries=2,
+)
+
+# Batch decomposition
+results = generator.batch_generate([
+    "Compare iPhone 15 and Samsung S24 specs",
+    "Symptoms and treatments for seasonal allergies",
+])
+# [
+#   ["iPhone 15 specifications camera battery processor",
+#    "Samsung Galaxy S24 specifications camera battery processor"],
+#   ["seasonal allergies symptoms nasal congestion sneezing",
+#    "seasonal allergies treatment antihistamines nasal sprays"],
+# ]
+```
+
+<Tip>
+  For queries you know are simple, pass `num_subqueries=2` explicitly to avoid the overhead of the complexity heuristic and keep retrieval lean.
+</Tip>
+
+<Note>
+  All sub-queries produced by this module are designed for independent parallel retrieval. Feed the full `result.sub_queries` list into `WeaviateRetriever` (or any other retriever) to fetch passages for each facet, then merge the results before passing them to the answer generator.
+</Note>

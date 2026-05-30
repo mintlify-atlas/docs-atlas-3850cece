@@ -1,0 +1,76 @@
+---
+title: "DSPy-Opt: Automated RAG Pipeline Optimization"
+sidebarTitle: "Introduction"
+description: "DSPy-Opt automates RAG pipeline optimization using DSPy optimizers — tune prompts and few-shot examples against DeepEval metrics across five QA benchmarks."
+---
+
+DSPy-Opt is a framework for building and automatically optimizing Retrieval-Augmented Generation (RAG) pipelines across diverse question answering datasets. Rather than relying on manual prompt engineering — a brittle, time-consuming process that doesn't generalize across models or tasks — DSPy-Opt uses DSPy optimizers to automatically search over prompt instructions and few-shot demonstrations, evaluating each candidate against rigorous DeepEval metrics and converging on a high-scoring compiled pipeline. The result is a reproducible, measurable optimization loop that replaces guesswork with systematic search.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Build and run an optimized FreshQA RAG pipeline in five steps.
+  </Card>
+  <Card title="Installation" icon="wrench" href="/installation">
+    Install DSPy-Opt, configure environment variables, and verify your setup.
+  </Card>
+  <Card title="Pipeline Architecture" icon="diagram-project" href="/concepts/pipeline-architecture">
+    Explore the five-stage RAG pipeline and how each component contributes.
+  </Card>
+  <Card title="Optimizers" icon="sliders" href="/concepts/optimizers">
+    Compare MIPROv2, COPRO, BootstrapFewShot, SIMBA, and GEPA in depth.
+  </Card>
+</CardGroup>
+
+## The Problem: Manual Prompt Engineering Doesn't Scale
+
+Traditional RAG pipelines require hand-written prompts at every stage — query rewriting, decomposition, metadata extraction, and answer generation. These prompts are sensitive to model choice, dataset characteristics, and retrieval quality. Tuning them manually is expensive and the gains rarely transfer. DSPy-Opt replaces this workflow with a programmatic optimization loop: define your pipeline as composable DSPy modules, attach a metric, and let an optimizer compile the best version of each prompt automatically.
+
+## Five-Stage Pipeline Architecture
+
+Every DSPy-Opt pipeline follows a consistent five-stage architecture. Each stage is implemented as a DSPy module and participates in the optimization loop.
+
+**Stage 1 — QueryRewriter**: The original question is passed to `QueryRewriter`, which uses a `ChainOfThought` DSPy module to produce a search-optimized query. It expands the question with relevant synonyms and concepts, clarifies ambiguous terms, removes conversational noise, and preserves key entities and numerical constraints. The output is a concise 5–15 word query string ready for the retriever.
+
+**Stage 2 — SubQueryGenerator**: The rewritten query is passed to `SubQueryGenerator`, which decomposes it into multiple focused sub-queries using a `ChainOfThought` module. Each sub-query addresses a distinct aspect of the original question, is self-contained for independent search execution, and preserves all critical constraints. The number of sub-queries scales with query complexity, from 2 for simple questions to 5 for highly multi-faceted ones.
+
+**Stage 3 — MetadataExtractor**: `MetadataExtractor` uses a dedicated extractor LLM (separate from the answer LLM) to parse both the rewritten query and each sub-query and extract structured metadata according to a user-defined JSON schema. Only fields that are successfully extracted — with non-null values directly stated in the input — are included in the result. This structured metadata is then used for precise filtering in the retriever step.
+
+**Stage 4 — WeaviateRetriever**: `WeaviateRetriever` performs hybrid search against a Weaviate vector database collection, combining vector similarity search with keyword-based BM25 filtering. It is called once for the main rewritten query and once for each sub-query, applying the extracted metadata as a `weaviate.classes.query.Filter`. All retrieved passages are aggregated and deduplicated while preserving order.
+
+**Stage 5 — ChainOfThought Answer Generation**: The unique retrieved passages are passed as context to a `dspy.ChainOfThought` module (`FreshQAAnswerSignature`), which generates a concise answer and a brief explanation of how the answer was derived. Both the `answer` and `reasoning` fields are returned in the final `dspy.Prediction`.
+
+## Supported Optimizers
+
+DSPy-Opt ships optimization scripts for five DSPy optimizers, each targeting a different trade-off between search budget, what gets tuned, and how candidates are evaluated.
+
+- **MIPROv2** (Multiprompt Instruction PROposal Optimizer v2) jointly tunes both prompt instructions and few-shot demonstrations using Bayesian optimization over a space of instruction–demo combinations, making it the strongest general-purpose default.
+- **COPRO** performs coordinate ascent over prompt instructions only, iterating through a breadth/depth schedule of instruction edits — useful for fast prompt-only gains without the cost of demo search.
+- **BootstrapFewShotWithRandomSearch** focuses exclusively on few-shot demo selection, bootstrapping high-scoring traces from the training set and using random search to find the best demo subset — a valuable baseline for measuring the isolated impact of demonstrations.
+- **SIMBA** (Stochastic Introspective Mini-Batch Ascent) samples mini-batches from the training set, identifies challenging examples with high output variability, and uses the LLM to introspectively generate self-reflective improvement rules — an efficient optimizer for larger datasets.
+- **GEPA** (Genetic-Pareto) evolves prompts through a reflection-driven loop in which a separate reflection LLM analyzes execution traces and textual feedback from the metric function, then proposes improved instructions managed via a Pareto frontier of candidate programs.
+
+## Supported Datasets
+
+DSPy-Opt provides complete pipeline implementations — indexing, optimization, and evaluation scripts — for five QA datasets spanning a range of question types and retrieval challenges.
+
+| Dataset | Complexity Type | Description |
+|---|---|---|
+| **FreshQA** (SealQA) | Single-hop | Dynamic QA benchmark with diverse question types and false-premise debunking |
+| **HotpotQA** | Multi-hop | Multi-hop questions with strong supervision for supporting facts |
+| **PubMedQA** | Biomedical | Biomedical QA derived from PubMed abstracts |
+| **TriviaQA** | Trivia / factoid | Question-answer-evidence triples authored by trivia enthusiasts |
+| **Wikipedia** | General knowledge | Large-scale Wikipedia articles paired with WikiQA question-answer pairs |
+
+## Evaluation Stack
+
+DSPy-Opt uses [DeepEval](https://deepeval.com/) to evaluate pipeline quality at every step of the optimization loop. Five metrics are computed for each prediction:
+
+- **Answer Relevancy** — measures how relevant the generated answer is to the input question.
+- **Faithfulness** — verifies that the answer is grounded in the retrieved context passages, not hallucinated.
+- **Contextual Precision** — evaluates whether the retrieved passages are ranked with the most relevant ones first.
+- **Contextual Recall** — measures how much of the expected answer is covered by the retrieved context.
+- **Contextual Relevancy** — assesses the overall relevance of the retrieved passage set to the question.
+
+Scores are averaged into a single float for optimizers that require a scalar metric (`create_metrics_function`). GEPA additionally receives a per-metric textual feedback string via `create_gepa_metrics_function`, which its reflection LLM uses to diagnose failures and propose targeted prompt improvements.
+
+Optimization runs are traced and logged in [Confident AI](https://www.confident-ai.com/), providing a full audit trail of metric scores across every evaluated candidate during the optimization search.

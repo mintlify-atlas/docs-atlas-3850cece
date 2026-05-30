@@ -1,0 +1,127 @@
+---
+title: "QueryRewriter: Optimize Queries for Retrieval"
+sidebarTitle: "QueryRewriter"
+description: "QueryRewriter is a dspy.Module that rewrites user queries by expanding synonyms, clarifying ambiguity, and removing noise to improve search effectiveness."
+---
+
+`QueryRewriter` is a `dspy.Module` that transforms raw user queries into clean, search-optimized strings before they reach the retrieval layer. It expands relevant synonyms and concepts, clarifies ambiguous terms, removes conversational noise, and preserves critical constraints such as dates, numbers, and named entities. Because it is a standard DSPy module, it is fully optimizable — DSPy optimizers like MIPROv2 and COPRO can tune its prompt instructions and few-shot demonstrations automatically.
+
+## Signature
+
+The module is driven by `QueryRewriteSignature`, which defines the contract between the LLM and the rewriting task:
+
+| Field | Type | Description |
+|---|---|---|
+| `original_query` | `InputField` | The user's raw search query. The LLM must rewrite it to improve search effectiveness without altering core intent — expanding synonyms, clarifying ambiguity, removing noise, and preserving key entities and constraints. |
+| `rewritten_query` | `OutputField` | Optimized query string ready for the search engine. Must be 5–15 words, contain only essential search terms, exclude phrases like "I want" or "looking for", and output **only** the rewritten query string with no additional text. |
+
+## Constructor
+
+```python
+QueryRewriter(use_chain_of_thought: bool = True)
+```
+
+<ParamField path="use_chain_of_thought" type="bool" default="True">
+  When `True`, the rewriter uses `dspy.ChainOfThought` to reason through the transformation step by step before producing the rewritten query. This yields higher-quality rewrites at the cost of a slightly longer LLM call. When `False`, it uses `dspy.Predict` for a direct, faster rewrite with no explicit reasoning trace.
+</ParamField>
+
+## Methods
+
+### `forward`
+
+```python
+forward(query: str) -> dspy.Prediction
+```
+
+Rewrites a single query for optimal search performance.
+
+<ParamField path="query" type="str" required>
+  The original user search query to rewrite.
+</ParamField>
+
+**Returns:** `dspy.Prediction` containing:
+- `rewritten_query` — the optimized search string
+- `rationale` *(only when `use_chain_of_thought=True`)* — the step-by-step reasoning used to produce the rewrite
+
+---
+
+### `batch_rewrite`
+
+```python
+batch_rewrite(queries: List[str]) -> List[str]
+```
+
+Rewrites multiple queries by calling `forward` on each. Returns a plain `List[str]` of optimized query strings in the same order as the input.
+
+<ParamField path="queries" type="List[str]" required>
+  A list of original user search queries to rewrite.
+</ParamField>
+
+**Returns:** `List[str]` — one optimized query string for each input query.
+
+## Example transformations
+
+The module applies several classes of transformation derived from the signature instructions and class docstring:
+
+| Original query | Rewritten query |
+|---|---|
+| `"How do I fix my leaking faucet?"` | `"faucet repair leak plumbing tools"` |
+| `"Best camera under $500 for travel"` | `"best compact camera $500 travel"` |
+| `"cheap flights to Paris next week"` | `"affordable flights Paris France departure date next 7 days"` |
+
+## Usage
+
+```python
+from dspy_opt.utils.query_rewriter import QueryRewriter
+
+# Default: uses ChainOfThought for higher-quality rewrites
+rewriter = QueryRewriter()
+
+# Single query rewrite
+result = rewriter("cheap flights to Paris next week")
+print(result.rewritten_query)
+# "affordable flights Paris France departure date next 7 days"
+
+# Access the reasoning trace (available when use_chain_of_thought=True)
+print(result.rationale)
+
+# Batch rewrite
+optimized = rewriter.batch_rewrite([
+    "iPhone battery life",
+    "gluten free restaurants",
+])
+# ['iPhone 15 battery endurance specifications',
+#  'gluten-free restaurants nearby dietary restriction']
+
+# Faster mode without reasoning steps
+fast_rewriter = QueryRewriter(use_chain_of_thought=False)
+result = fast_rewriter("what are symptoms of diabetes")
+print(result.rewritten_query)
+```
+
+<Tip>
+  Use `use_chain_of_thought=True` (the default) during development and optimization. Switch to `use_chain_of_thought=False` only if latency is a hard constraint and the quality trade-off is acceptable.
+</Tip>
+
+## DSPy optimization
+
+`QueryRewriter` is a first-class DSPy module — it stores its predictor (`self.rewriter`) as a named attribute that DSPy optimizers can inspect and modify. This means you can compile it with any DSPy optimizer to automatically improve its prompt instructions and few-shot examples against your retrieval quality metric.
+
+```python
+import dspy
+from dspy_opt.utils.query_rewriter import QueryRewriter
+from dspy_opt.utils.metrics import create_metrics_function
+
+# Configure your LM
+dspy.configure(lm=dspy.LM("openai/gpt-4o-mini"))
+
+rewriter = QueryRewriter()
+
+# Compile with MIPROv2 using your training set and metric
+optimizer = dspy.MIPROv2(metric=create_metrics_function(metrics))
+compiled_rewriter = optimizer.compile(rewriter, trainset=trainset)
+```
+
+<Note>
+  After compilation, save the optimized module with `compiled_rewriter.save("rewriter.json")` so you don't need to re-run the optimization on every startup.
+</Note>

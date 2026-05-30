@@ -1,0 +1,80 @@
+---
+title: "Supported QA Datasets in DSPy-Opt"
+sidebarTitle: "Overview"
+description: "DSPy-Opt includes five pre-built RAG pipelines for FreshQA, HotpotQA, PubMedQA, TriviaQA, and Wikipedia — covering single-hop, multi-hop, biomedical, and general knowledge QA."
+---
+
+DSPy-Opt ships five ready-to-use RAG pipeline implementations, each targeting a different question answering benchmark. Together they span the full breadth of QA difficulty — from fast single-hop lookups and false-premise debunking through multi-hop entity chaining, biomedical abstract reasoning, trivia factoid recall, and broad general-knowledge retrieval over cleaned Wikipedia articles. Every pipeline shares the same five-stage architecture and the same optimizer scripts pattern, so switching datasets or adding a new one requires only minimal changes.
+
+## Supported Datasets
+
+| Dataset | HuggingFace ID | Description | Complexity Type |
+| :------ | :------------- | :---------- | :-------------- |
+| FreshQA (SealQA) | [`vtllms/sealqa`](https://huggingface.co/datasets/vtllms/sealqa) | Dynamic QA benchmark with diverse question types and false-premise debunking | Single-hop |
+| HotpotQA | [`hotpotqa/hotpot_qa`](https://huggingface.co/datasets/hotpotqa/hotpot_qa) | Multi-hop questions with strong supervision for supporting facts | Multi-hop |
+| PubMedQA | [`qiaojin/PubMedQA`](https://huggingface.co/datasets/qiaojin/PubMedQA) | Biomedical QA based on PubMed abstracts | Biomedical |
+| TriviaQA | [`mandarjoshi/trivia_qa`](https://huggingface.co/datasets/mandarjoshi/trivia_qa) | Question-answer-evidence triples authored by trivia enthusiasts | Trivia, factoid |
+| Wikipedia | [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) + [WikiQA](https://huggingface.co/datasets/microsoft/wiki_qa) | Large-scale cleaned Wikipedia articles with WikiQA pairs for QA | General knowledge |
+
+## Shared Five-Stage Pipeline Architecture
+
+Although every dataset uses a different module class and metadata schema, all five pipelines execute the same logical stages in `forward()`. Each stage is implemented as a reusable component drawn from `dspy_opt.utils`.
+
+<Steps>
+  <Step title="Query Rewriting">
+    `QueryRewriter` expands synonyms, removes conversational noise, and produces a search-optimized version of the original question.
+  </Step>
+  <Step title="Sub-Query Generation">
+    `SubQueryGenerator` decomposes the rewritten query into multiple self-contained sub-queries that can be executed in parallel, boosting retrieval coverage for complex questions.
+  </Step>
+  <Step title="Metadata Extraction">
+    `MetadataExtractor` calls an LLM with structured-output generation to parse each query against a dataset-specific JSON schema, producing typed filter values for Weaviate.
+  </Step>
+  <Step title="Hybrid Retrieval">
+    `WeaviateRetriever` performs hybrid search (vector + keyword) on the main query and all sub-queries, applying the extracted metadata as filters. Results are aggregated and deduplicated.
+  </Step>
+  <Step title="Answer Generation">
+    `dspy.ChainOfThought` receives the unique retrieved passages and generates a final `answer` together with an explicit `reasoning` trace.
+  </Step>
+</Steps>
+
+## Optimizer Scripts Pattern
+
+All five dataset directories follow the same file-naming convention. Each dataset exposes scripts for every supported DSPy optimizer and a dedicated evaluation script:
+
+```
+<dataset>_indexing.py                    # Index documents to Weaviate
+<dataset>_rag_module.py                  # Pipeline class definition
+<dataset>_rag_mipro.py                   # MIPROv2 optimization
+<dataset>_rag_copro.py                   # COPRO optimization
+<dataset>_rag_bootstrap_few_shot.py      # BootstrapFewShot optimization
+<dataset>_rag_simba.py                   # SIMBA optimization
+<dataset>_rag_gepa.py                    # GEPA optimization
+<dataset>_rag_evaluation.py              # DeepEval evaluation
+```
+
+Each script reads its hyperparameters from a matching `_config.yml` file that lives in the same directory. All scripts must be run from inside the dataset subdirectory so that relative config paths resolve correctly.
+
+<Tip>
+  All pipelines share the same five DeepEval metrics: **Answer Relevancy**, **Faithfulness**, **Contextual Precision**, **Contextual Recall**, and **Contextual Relevancy**. Thresholds are configured per-dataset in each `_evaluation_config.yml`.
+</Tip>
+
+## Dataset Pages
+
+<CardGroup cols={2}>
+  <Card title="FreshQA" icon="bolt" href="/datasets/freshqa">
+    Single-hop and false-premise debunking on the SealQA longseal benchmark. Uses `title` and `category` metadata filters.
+  </Card>
+  <Card title="HotpotQA" icon="link" href="/datasets/hotpotqa">
+    Multi-hop reasoning over distractor documents. Uses `title` and `category` metadata filters with entity chaining.
+  </Card>
+  <Card title="PubMedQA" icon="flask" href="/datasets/pubmedqa">
+    Biomedical domain QA from PubMed abstracts. Uses a rich six-field metadata schema for high-precision filtering.
+  </Card>
+  <Card title="TriviaQA" icon="star" href="/datasets/triviaqa">
+    Factoid and trivia questions with typed metadata including an enum `content_type` and numeric `year` field.
+  </Card>
+  <Card title="Wikipedia" icon="book" href="/datasets/wikipedia">
+    General knowledge QA over cleaned Wikipedia articles indexed from `wikimedia/wikipedia` with WikiQA pairs.
+  </Card>
+</CardGroup>

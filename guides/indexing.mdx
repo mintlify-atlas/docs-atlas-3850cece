@@ -1,0 +1,213 @@
+---
+title: "Index Dataset Documents into Weaviate"
+sidebarTitle: "Indexing"
+description: "Load a HuggingFace QA dataset, extract structured metadata with an LLM, generate embeddings with SentenceTransformers, and store documents in a Weaviate collection."
+---
+
+The indexing pipeline prepares your dataset for retrieval by loading raw documents from HuggingFace, enriching each document with structured metadata extracted by an LLM, encoding the texts into dense vector embeddings using a SentenceTransformer model, and writing the resulting objects into a Weaviate collection. Every subsequent RAG pipeline query runs against this pre-built collection, so indexing is a required one-time setup step before running any optimizer or evaluation script.
+
+## Prerequisites
+
+Before running the indexing script, ensure the following are in place:
+
+- A Weaviate Cloud cluster is running and accessible.
+- A `.env` file exists in the project root with the required credentials:
+
+```bash
+WEAVIATE_URL=your_weaviate_cluster_url
+WEAVIATE_API_KEY=your_weaviate_api_key
+GROQ_API_KEY=your_groq_api_key
+```
+
+- Project dependencies are installed with `uv sync --all-extras --dev` and the virtual environment is activated.
+
+## Indexing Workflow
+
+<Steps>
+
+  <Step title="Load the YAML config">
+    The script opens `<dataset>_indexing_config.yml` from the current directory and parses all settings — dataset coordinates, LLM model name, embedding model, metadata schema, collection name, and encoding batch size.
+
+    ```python
+    with open("freshqa_indexing_config.yml", "r") as f:
+        config = yaml.safe_load(f)
+    ```
+  </Step>
+
+  <Step title="Load the dataset from HuggingFace">
+    The dataset is fetched via the `datasets` library using the `name`, `subset`, and `split` fields from the config. For FreshQA, this retrieves the `longseal` subset of `vtllms/sealqa`.
+
+    ```python
+    dataset = load_dataset(
+        config["dataset"]["name"],
+        config["dataset"]["subset"],
+        split=config["dataset"]["split"],
+    )
+    doc_texts = [gold_label[0]["text"] for gold_label in dataset["golds"]]
+    doc_examples = [dspy.Example(text=doc_text, metadata={}) for doc_text in doc_texts]
+    ```
+  </Step>
+
+  <Step title="Extract structured metadata with an LLM">
+    A `MetadataExtractor` instance is created with the configured LLM (e.g. `groq/llama-3.3-70b-versatile`). It calls `transform_documents()` to iterate over every document, run structured-output generation against the metadata schema, and attach validated fields to each `dspy.Example`.
+
+    ```python
+    extractor_llm = dspy.LM(
+        model=config["extractor_llm"]["model"],
+        api_key=os.getenv("GROQ_API_KEY"),
+    )
+    metadata_extractor = MetadataExtractor(extractor_llm=extractor_llm)
+    doc_examples = metadata_extractor.transform_documents(doc_examples, metadata_schema)
+    ```
+
+    Only fields that are successfully extracted and non-null are stored; missing values are silently dropped rather than filled with placeholders.
+  </Step>
+
+  <Step title="Encode documents with SentenceTransformer">
+    All document texts are encoded into dense vectors in batches. The `batch_size` and `show_progress_bar` values come from the `document_encoding` section of the config.
+
+    ```python
+    model = SentenceTransformer(
+        config["embedding"]["embedding_model"],
+        tokenizer_kwargs=config["embedding"]["tokenizer_kwargs"],
+    )
+    embeddings = model.encode(
+        doc_texts,
+        batch_size=config["document_encoding"]["batch_size"],
+        show_progress_bar=config["document_encoding"]["show_progress_bar"],
+    )
+    ```
+  </Step>
+
+  <Step title="Create the Weaviate collection">
+    The script connects to Weaviate Cloud using `WEAVIATE_URL` and `WEAVIATE_API_KEY` from environment variables. It checks whether the target collection already exists, deletes it if so, and creates a fresh collection with a `self_provided` vector configuration (since embeddings are generated externally by SentenceTransformer).
+
+    ```python
+    client = weaviate.connect_to_weaviate_cloud(
+        cluster_url=WEAVIATE_URL,
+        auth_credentials=wvc.init.Auth.api_key(WEAVIATE_API_KEY),
+    )
+    if client.collections.exists(collection_name):
+        client.collections.delete(collection_name)
+
+    weaviate_collection = client.collections.create(
+        collection_name,
+        vector_config=wvc.config.Configure.Vectors.self_provided(),
+    )
+    ```
+  </Step>
+
+  <Step title="Insert documents with insert_many()">
+    Each document is assembled into a `DataObject` that carries the raw text, any extracted metadata fields, and the precomputed embedding vector. All objects are written to Weaviate in a single `insert_many()` call.
+
+    ```python
+    question_objs = [
+        wvc.data.DataObject(
+            properties={
+                "document_text": doc_text,
+                **doc_example.metadata,
+            },
+            vector=embedding,
+        )
+        for embedding, doc_text, doc_example in zip(embeddings, doc_texts, doc_examples)
+    ]
+    weaviate_collection = client.collections.use(collection_name)
+    weaviate_collection.data.insert_many(question_objs)
+    client.close()
+    ```
+  </Step>
+
+</Steps>
+
+## Run the Indexing Script
+
+Each dataset has its own indexing script. Run the script from inside the dataset directory so that the config YAML is resolved relative to the current working directory:
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_indexing.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_indexing.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_indexing.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_indexing.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_indexing.py
+```
+
+</CodeGroup>
+
+<Warning>
+  If the Weaviate collection named in `collection_name` already exists, the indexing script **deletes it and recreates it from scratch**. All previously indexed documents, vectors, and metadata are permanently removed. Back up any state you need before re-indexing.
+</Warning>
+
+## Indexing Config Reference
+
+The indexing config file controls every aspect of the pipeline. Below is the complete `freshqa_indexing_config.yml` with inline annotations:
+
+```yaml
+# FreshQA Indexing Config
+
+# Embedding model used to encode document texts into dense vectors.
+# tokenizer_kwargs are forwarded directly to the SentenceTransformer tokenizer.
+embedding:
+  embedding_model: "Qwen/Qwen3-Embedding-0.6B"
+  tokenizer_kwargs:
+    padding_side: "left"
+
+# HuggingFace dataset coordinates — name, subset (config), and split.
+dataset:
+  name: "vtllms/sealqa"
+  subset: "longseal"
+  split: "test"
+
+# JSON schema that drives LLM metadata extraction.
+# Only string, number, and boolean property types are supported.
+metadata_schema:
+  properties:
+    title:
+      type: "string"
+      description: "The main title or name of the subject"
+    category:
+      type: "string"
+      description: "Primary category or type of content"
+
+# LLM used by MetadataExtractor to produce structured metadata from document text.
+# The api_key value is the name of the environment variable that holds the key.
+extractor_llm:
+  model: "groq/llama-3.3-70b-versatile"
+
+# Name of the Weaviate collection to create and populate.
+collection_name: "FreshQA"
+
+# Controls how document texts are batched and encoded by SentenceTransformer.
+document_encoding:
+  batch_size: 16
+  show_progress_bar: true
+```
+
+### Config Sections
+
+| Section | Key fields | Purpose |
+|---|---|---|
+| `dataset` | `name`, `subset`, `split` | Identifies which HuggingFace dataset and split to load |
+| `extractor_llm` | `model` | LLM used by `MetadataExtractor` for structured-output generation |
+| `embedding` | `embedding_model`, `tokenizer_kwargs` | SentenceTransformer model and tokenizer settings |
+| `metadata_schema` | `properties` | JSON schema that drives metadata extraction per document |
+| `collection_name` | — | Weaviate collection target; will be recreated if it exists |
+| `document_encoding` | `batch_size`, `show_progress_bar` | Batching settings for the embedding encoding loop |

@@ -1,0 +1,280 @@
+---
+title: "Configure Pipelines with YAML"
+sidebarTitle: "Configuration"
+description: "Every DSPy-Opt pipeline is driven by YAML config files — set models, embedding, Weaviate, metadata schema, optimizer hyperparameters, and evaluation thresholds without code changes."
+---
+
+Every script in DSPy-Opt — indexing, optimization, and evaluation — reads all of its settings from a YAML file at startup. No code changes are needed to switch models, adjust optimizer hyperparameters, change metric thresholds, or point at a different dataset. There are two categories of config file: the **indexing config** (used by `<dataset>_indexing.py`) and the **optimizer/evaluation config** (used by all optimizer scripts and the evaluation script, which share the same structure).
+
+<Tip>
+  The fastest way to configure a new dataset or optimizer run is to copy an existing config file from the `freshqa/` directory and update the dataset coordinates, collection name, and any hyperparameters you want to change.
+</Tip>
+
+## Indexing Config
+
+The indexing config controls how raw documents are processed and loaded into Weaviate. Below is the complete `freshqa_indexing_config.yml`:
+
+```yaml
+# FreshQA Indexing Config
+
+# Embedding model used to encode document texts into dense vectors.
+# tokenizer_kwargs are forwarded directly to the SentenceTransformer tokenizer.
+embedding:
+  embedding_model: "Qwen/Qwen3-Embedding-0.6B"
+  tokenizer_kwargs:
+    padding_side: "left"
+
+# HuggingFace dataset coordinates — name, subset (config), and split.
+dataset:
+  name: "vtllms/sealqa"
+  subset: "longseal"
+  split: "test"
+
+# JSON schema that drives LLM metadata extraction.
+# Supported property types: string, number, boolean.
+metadata_schema:
+  properties:
+    title:
+      type: "string"
+      description: "The main title or name of the subject"
+    category:
+      type: "string"
+      description: "Primary category or type of content"
+
+# LLM used by MetadataExtractor to produce structured metadata from document text.
+extractor_llm:
+  model: "groq/llama-3.3-70b-versatile"
+
+# Name of the Weaviate collection to create and populate.
+# If it already exists it will be deleted and recreated.
+collection_name: "FreshQA"
+
+# Controls how document texts are batched and encoded by SentenceTransformer.
+document_encoding:
+  batch_size: 16
+  show_progress_bar: true
+```
+
+### Indexing config sections
+
+| Section | Fields | Description |
+|---|---|---|
+| `dataset` | `name`, `subset`, `split` | HuggingFace dataset identifier and split to load |
+| `extractor_llm` | `model` | LLM used by `MetadataExtractor`; API key is read from the matching env var |
+| `embedding` | `embedding_model`, `tokenizer_kwargs` | SentenceTransformer model name and tokenizer keyword arguments |
+| `metadata_schema` | `properties` | JSON schema defining fields to extract from each document; see below |
+| `collection_name` | — | Weaviate collection to create; deleted and recreated if already present |
+| `document_encoding` | `batch_size`, `show_progress_bar` | Batch size and progress display for the SentenceTransformer encode call |
+
+---
+
+## Optimizer / Evaluation Config
+
+All optimizer scripts and the standalone evaluation script share the same config structure. The only section that differs between optimizers is the `optimizer` block at the bottom. Below is the complete `freshqa_rag_mipro_config.yml` as a reference:
+
+```yaml
+# FreshQA RAG MIPROv2 Optimization Config
+
+# LLM used by dspy.ChainOfThought to generate the final answer.
+# api_key_env is the name of the environment variable holding the API key.
+answer_llm:
+  model: "groq/qwen3-32b"
+  api_key_env: "GROQ_API_KEY"
+
+# LLM used by MetadataExtractor to extract structured metadata from queries.
+extractor_llm:
+  model: "groq/llama-3.3-70b-versatile"
+  api_key_env: "GROQ_API_KEY"
+
+# Embedding model for encoding queries at retrieval time.
+embedding:
+  model: "Qwen/Qwen3-Embedding-0.6B"
+  tokenizer_kwargs:
+    padding_side: "left"
+
+# Weaviate connection — values are environment variable names, not raw credentials.
+weaviate:
+  url_env: "WEAVIATE_URL"
+  api_key_env: "WEAVIATE_API_KEY"
+  collection_name: "FreshQA"
+  top_k: 5
+
+# Number of passages retrieved per query inside the RAG pipeline forward pass.
+rag_pipeline:
+  top_k: 5
+
+# JSON schema used by MetadataExtractor at query time (must match the indexing schema).
+metadata_schema:
+  properties:
+    title:
+      type: "string"
+      description: "The main title or name of the subject"
+    category:
+      type: "string"
+      description: "Primary category or type of content"
+
+# HuggingFace dataset used for train/test split during optimization.
+dataset:
+  name: "vtllms/sealqa"
+  subset: "longseal"
+  split: "test"
+  test_size: 0.2   # fraction held out as test set
+
+# Evaluation configuration — shared by both the optimizer and the evaluation script.
+evaluation:
+  # LLM used by DeepEval to judge answers. base_url must be an OpenAI-compatible endpoint.
+  evaluator_llm:
+    model: "groq/qwen3-32b"
+    api_key_env: "GROQ_API_KEY"
+    base_url: "https://api.groq.com/openai/v1"
+
+  # Per-metric thresholds and async settings.
+  metrics:
+    answer_relevancy:
+      threshold: 0.8
+      async_mode: false
+    contextual_precision:
+      threshold: 0.8
+      async_mode: false
+    contextual_recall:
+      threshold: 0.5
+      async_mode: false
+    contextual_relevancy:
+      threshold: 0.5
+      async_mode: false
+    faithfulness:
+      threshold: 0.5
+      async_mode: false
+
+  # dspy.Evaluate settings.
+  settings:
+    num_threads: 1
+    display_progress: true
+    display_table: 5
+    provide_traceback: true
+
+# Optimizer-specific hyperparameters — this section is the only part that
+# differs across the five optimizer config files.
+optimizer:
+  max_bootstrapped_demos: 3
+  max_labeled_demos: 16
+  auto: "medium"
+```
+
+### Common config sections
+
+| Section | Key fields | Description |
+|---|---|---|
+| `answer_llm` | `model`, `api_key_env` | LLM for answer generation; `api_key_env` is the env var name |
+| `extractor_llm` | `model`, `api_key_env` | LLM for query-time metadata extraction |
+| `embedding` | `model`, `tokenizer_kwargs` | SentenceTransformer used to encode queries before retrieval |
+| `weaviate` | `url_env`, `api_key_env`, `collection_name`, `top_k` | Weaviate connection settings; URL and API key are read from env |
+| `rag_pipeline` | `top_k` | Passages retrieved per query in the pipeline `forward()` call |
+| `metadata_schema` | `properties` | Must match the schema used during indexing |
+| `dataset` | `name`, `subset`, `split`, `test_size` | HuggingFace dataset and train/test split fraction |
+| `evaluation.evaluator_llm` | `model`, `api_key_env`, `base_url` | DeepEval judge LLM; must expose an OpenAI-compatible endpoint |
+| `evaluation.metrics` | per-metric `threshold`, `async_mode` | Threshold above which a metric is considered passing |
+| `evaluation.settings` | `num_threads`, `display_progress`, `display_table`, `provide_traceback` | `dspy.Evaluate` runtime settings |
+
+---
+
+## Optimizer-Specific Sections
+
+The `optimizer` block is the only section that changes between optimizer config files. Below are the optimizer blocks for each supported optimizer.
+
+### MIPROv2
+
+MIPROv2 proposes instruction variants and few-shot demo sets and uses Bayesian optimisation to search their combinations. `auto` controls the overall search budget (`"light"`, `"medium"`, or `"heavy"`).
+
+```yaml
+optimizer:
+  max_bootstrapped_demos: 3
+  max_labeled_demos: 16
+  auto: "medium"
+```
+
+### COPRO
+
+COPRO performs instruction-only coordinate ascent. `breadth` controls how many candidate instructions are proposed per round; `depth` controls how many rounds of refinement are run.
+
+```yaml
+optimizer:
+  breadth: 10
+  depth: 3
+  init_temperature: 1.4
+```
+
+### BootstrapFewShot
+
+`BootstrapFewShotWithRandomSearch` focuses on demo selection only. `max_rounds` controls how many random search iterations over bootstrapped demo subsets are attempted.
+
+```yaml
+optimizer:
+  max_bootstrapped_demos: 3
+  max_labeled_demos: 16
+  max_rounds: 1
+```
+
+### SIMBA
+
+SIMBA uses mini-batch iterative ascent with self-reflective rule generation. `bsize` is the mini-batch size; `num_candidates` controls how many candidate programs are maintained; `max_steps` is the number of update iterations; `max_demos` caps the number of few-shot examples.
+
+```yaml
+optimizer:
+  bsize: 32
+  num_candidates: 6
+  max_steps: 8
+  max_demos: 4
+```
+
+### GEPA
+
+GEPA evolves prompts via reflection-driven Pareto-based candidate selection. It also requires a `reflection_llm` section (not present in other optimizer configs) which is used by the reflection loop to analyse failures and propose improved instructions.
+
+```yaml
+# Reflection LLM configuration (required by GEPA only)
+reflection_llm:
+  model: "groq/qwen3-32b"
+  api_key_env: "GROQ_API_KEY"
+  temperature: 1.0
+  max_tokens: 32000
+
+optimizer:
+  max_full_evals: 10
+  reflection_minibatch_size: 3
+  candidate_selection_strategy: "pareto"
+  use_merge: true
+  num_threads: 1
+  seed: 0
+```
+
+---
+
+## Metadata Schema
+
+The `metadata_schema` section defines the fields extracted from each document (during indexing) and from each query (during retrieval). The schema is a JSON Schema–style object:
+
+```yaml
+metadata_schema:
+  properties:
+    title:
+      type: "string"
+      description: "The main title or name of the subject"
+    category:
+      type: "string"
+      description: "Primary category or type of content"
+```
+
+Supported property types are `string`, `number`, and `boolean`. The `description` is passed directly to the LLM to guide extraction — write it as a clear one-sentence definition of what the field should contain. The schema used in the optimizer config **must match** the schema used during indexing; mismatched field names will cause metadata filters to return no results.
+
+## DeepEval Metrics
+
+The `evaluation.metrics` block configures five DeepEval metrics. Each metric accepts a `threshold` (the minimum passing score from 0.0 to 1.0) and an `async_mode` flag. Set `async_mode: false` when working with rate-limited API endpoints to avoid throttling errors.
+
+| Metric key | DeepEval class | What it measures |
+|---|---|---|
+| `answer_relevancy` | `AnswerRelevancyMetric` | How relevant the generated answer is to the input question |
+| `contextual_precision` | `ContextualPrecisionMetric` | Precision of the retrieved passages with respect to the question |
+| `contextual_recall` | `ContextualRecallMetric` | Recall of the retrieved passages relative to the reference answer |
+| `contextual_relevancy` | `ContextualRelevancyMetric` | Overall relevance of retrieved passages to the question |
+| `faithfulness` | `FaithfulnessMetric` | Whether the answer is grounded in the retrieved context |

@@ -1,0 +1,160 @@
+---
+title: "WeaviateRetriever: Hybrid Search with Metadata Filtering"
+sidebarTitle: "WeaviateRetriever"
+description: "WeaviateRetriever performs hybrid vector and keyword search against a Weaviate collection, with optional metadata filtering built from extracted schema fields."
+---
+
+`WeaviateRetriever` is a `dspy.Module` that connects to a Weaviate Cloud cluster and executes hybrid search — combining dense vector similarity with sparse keyword matching — against a named collection. It accepts an optional precomputed query embedding for the vector leg, and an optional metadata dictionary (produced by `MetadataExtractor`) that is automatically converted into Weaviate property filters. The result is a `dspy.Prediction` containing a ranked list of passage strings ready for the answer generation step.
+
+## Constructor
+
+```python
+WeaviateRetriever(
+    weaviate_url: Optional[str] = None,
+    weaviate_api_key: Optional[str] = None,
+    collection_name: str = "Triviaqa",
+    top_k: int = 3,
+    metadata_schema: Optional[dict] = None,
+)
+```
+
+<ParamField path="weaviate_url" type="str" required>
+  Full URL of your Weaviate Cloud cluster endpoint (e.g. `"https://your-cluster.weaviate.cloud"`). Must be provided — omitting it raises a `ValueError` at construction time.
+</ParamField>
+
+<ParamField path="weaviate_api_key" type="str" required>
+  API key used to authenticate with the Weaviate cluster. Must be provided — omitting it raises a `ValueError` at construction time.
+</ParamField>
+
+<ParamField path="collection_name" type="str" default="Triviaqa">
+  Name of the Weaviate collection (class) to query. The collection must already exist in the cluster; if not, a `ValueError` is raised during initialization.
+</ParamField>
+
+<ParamField path="top_k" type="int" default="3">
+  Default number of passages to retrieve per query. Can be overridden per call via the `top_k` parameter in `forward`.
+</ParamField>
+
+<ParamField path="metadata_schema" type="dict">
+  Optional dictionary mapping metadata property names to their expected Python types — for example `{"category": str, "title": str}`. Only keys present in this schema are used when building Weaviate property filters from the `metadata` argument in `forward`. Keys not in the schema are silently skipped.
+</ParamField>
+
+<Warning>
+  A `ValueError` is raised immediately if either `weaviate_url` or `weaviate_api_key` is missing or empty. Provide both before constructing the retriever.
+</Warning>
+
+<Warning>
+  A `ConnectionError` is raised if `weaviate.connect_to_weaviate_cloud` cannot reach the cluster, or if `client.is_ready()` returns `False` after connecting. Verify your cluster URL and network access before use.
+</Warning>
+
+## Methods
+
+### `forward`
+
+```python
+forward(
+    query: str,
+    query_embedding: Optional[np.ndarray] = None,
+    top_k: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> dspy.Prediction
+```
+
+Performs hybrid search against the configured Weaviate collection and returns the top passages.
+
+<ParamField path="query" type="str" required>
+  The user query string used for the keyword leg of hybrid search. An empty or whitespace-only query immediately returns an empty `passages` list without contacting Weaviate.
+</ParamField>
+
+<ParamField path="query_embedding" type="np.ndarray">
+  Precomputed dense embedding vector for the vector leg of hybrid search. Passed directly as the `vector` argument to `collection.query.hybrid`. When `None`, Weaviate falls back to keyword-only search.
+</ParamField>
+
+<ParamField path="top_k" type="int">
+  Number of passages to retrieve for this call. Overrides the constructor-level `top_k` when provided; otherwise the constructor default is used.
+</ParamField>
+
+<ParamField path="metadata" type="Dict[str, Any]">
+  Optional metadata dictionary (typically produced by `MetadataExtractor.forward`) to filter results. Converted to a Weaviate `Filter` object via `metadata_to_weaviate_filter`. Keys not in `metadata_schema` are ignored.
+</ParamField>
+
+**Returns:** `dspy.Prediction` with a single attribute:
+- `passages` — `List[str]` of non-empty `document_text` property values from the matching Weaviate objects, ranked by hybrid score.
+
+On any exception during retrieval, the error is printed and an empty `passages` list is returned so the pipeline can continue.
+
+---
+
+### `metadata_to_weaviate_filter`
+
+```python
+metadata_to_weaviate_filter(metadata: Dict[str, Any]) -> Optional[Filter]
+```
+
+Converts a flat metadata dictionary into a Weaviate `Filter` object suitable for the `filters` argument of `collection.query.hybrid`.
+
+<ParamField path="metadata" type="Dict[str, Any]" required>
+  Metadata key-value pairs to translate into property filters.
+</ParamField>
+
+**Returns:** A `wvc.query.Filter` built from `Filter.and_(...)` over individual `Filter.by_property(key).like(val)` conditions, or `None` if no valid filter conditions were found.
+
+The method applies the following logic for each key-value pair:
+
+1. Skip the key if it is not present in `self.metadata_schema`.
+2. Check whether the value matches the expected Python type in the schema.
+3. If the type doesn't match, attempt coercion (e.g. `str("2021")` → `"2021"`); skip the field if coercion fails.
+4. Build a `.like()` property filter and add it to the filter list.
+5. Combine all valid filters with a logical `AND`.
+
+## Hybrid search internals
+
+Internally, `forward` calls:
+
+```python
+collection.query.hybrid(
+    query=query,
+    vector=query_embedding,
+    limit=limit,
+    filters=weaviate_filter,
+    return_metadata=wvc.query.MetadataQuery(certainty=True),
+)
+```
+
+The `certainty` metadata field is requested alongside each result but is not currently surfaced in the returned `dspy.Prediction`. Passages are extracted from the `document_text` property of each returned object, and any object with an empty or missing `document_text` is silently dropped.
+
+## Usage
+
+```python
+from dspy_opt.utils.weaviate_retriever import WeaviateRetriever
+
+retriever = WeaviateRetriever(
+    weaviate_url="https://your-cluster.weaviate.cloud",
+    weaviate_api_key="your-api-key",
+    collection_name="FreshQA",
+    top_k=5,
+    metadata_schema={"category": str, "title": str},
+)
+
+# Basic retrieval — vector leg disabled
+result = retriever(query="renewable energy adoption trends")
+print(result.passages)  # List[str]
+
+# Hybrid retrieval with a precomputed embedding
+embedding = embedding_model.encode("renewable energy adoption trends")
+result = retriever(
+    query="renewable energy adoption trends",
+    query_embedding=embedding,
+    metadata={"category": "science"},
+)
+print(result.passages)  # filtered and ranked passages
+
+# Override top_k for a single call
+result = retriever(
+    query="solar panel efficiency 2023",
+    top_k=10,
+)
+```
+
+<Tip>
+  Pair `WeaviateRetriever` with `MetadataExtractor` to build a metadata-filtered retrieval pipeline: extract metadata from the user's query, then pass the resulting dict as the `metadata` argument to `forward`. The retriever will automatically narrow results to documents whose Weaviate properties match.
+</Tip>

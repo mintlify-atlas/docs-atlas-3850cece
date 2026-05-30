@@ -1,0 +1,263 @@
+---
+title: "Evaluating RAG Pipelines with DeepEval"
+sidebarTitle: "Evaluation"
+description: "DSPy-Opt uses DeepEval metrics — Answer Relevancy, Faithfulness, Contextual Precision, Recall, and Relevancy — as the optimization objective and final evaluation measure."
+---
+
+DSPy-Opt integrates [DeepEval](https://deepeval.com/) as both the optimization objective and the final evaluation harness. Every candidate program explored by an optimizer is scored using the same five DeepEval metrics that are used to measure the finished pipeline — ensuring the optimization target and the reporting metric are identical. The `metrics.py` module provides two factory functions that wrap DeepEval's evaluation loop into DSPy-compatible callables: one that returns a plain float (for most optimizers) and one that returns a `dspy.Prediction` with score and feedback fields (for GEPA's reflection loop).
+
+## Supported Metrics
+
+All five metrics are instantiated from `deepeval.metrics` and accept a configurable threshold and an evaluator LLM. Each metric is run against a `LLMTestCase` built from the gold label and the pipeline's prediction:
+
+| Metric | Class | What it measures |
+|--------|-------|-----------------|
+| **Answer Relevancy** | `AnswerRelevancyMetric` | How relevant the generated answer is to the input question |
+| **Faithfulness** | `FaithfulnessMetric` | Whether the answer is grounded in the retrieved context and avoids hallucinations |
+| **Contextual Precision** | `ContextualPrecisionMetric` | Precision of the retrieved passages — how many are actually relevant |
+| **Contextual Recall** | `ContextualRecallMetric` | Recall of the retrieved passages — what fraction of the relevant content was retrieved |
+| **Contextual Relevancy** | `ContextualRelevancyMetric` | Overall relevance of retrieved passages to the question |
+
+## Metric Instantiation
+
+Metrics are configured in the YAML file and instantiated in the optimizer script. Each metric accepts a threshold (the minimum passing score) and an `async_mode` flag. A `LocalModel` wrapping your evaluator LLM is passed to every metric:
+
+```python
+from deepeval.metrics import (
+    AnswerRelevancyMetric,
+    ContextualPrecisionMetric,
+    ContextualRecallMetric,
+    ContextualRelevancyMetric,
+    FaithfulnessMetric,
+)
+from deepeval.models import LocalModel
+
+evaluator_llm = LocalModel(
+    model=config["evaluation"]["evaluator_llm"]["model"],
+    api_key=os.getenv(config["evaluation"]["evaluator_llm"]["api_key_env"]),
+    base_url=config["evaluation"]["evaluator_llm"]["base_url"],
+)
+
+metrics = [
+    AnswerRelevancyMetric(
+        model=evaluator_llm,
+        **config["evaluation"]["metrics"]["answer_relevancy"],
+    ),
+    ContextualPrecisionMetric(
+        model=evaluator_llm,
+        **config["evaluation"]["metrics"]["contextual_precision"],
+    ),
+    ContextualRecallMetric(
+        model=evaluator_llm,
+        **config["evaluation"]["metrics"]["contextual_recall"],
+    ),
+    ContextualRelevancyMetric(
+        model=evaluator_llm,
+        **config["evaluation"]["metrics"]["contextual_relevancy"],
+    ),
+    FaithfulnessMetric(
+        model=evaluator_llm,
+        **config["evaluation"]["metrics"]["faithfulness"],
+    ),
+]
+```
+
+The corresponding YAML config block (from `freshqa_rag_mipro_config.yml`):
+
+```yaml
+evaluation:
+  evaluator_llm:
+    model: "groq/qwen3-32b"
+    api_key_env: "GROQ_API_KEY"
+    base_url: "https://api.groq.com/openai/v1"
+
+  metrics:
+    answer_relevancy:
+      threshold: 0.8
+      async_mode: false
+    contextual_precision:
+      threshold: 0.8
+      async_mode: false
+    contextual_recall:
+      threshold: 0.5
+      async_mode: false
+    contextual_relevancy:
+      threshold: 0.5
+      async_mode: false
+    faithfulness:
+      threshold: 0.5
+      async_mode: false
+```
+
+## Metric Function Variants
+
+The `metrics.py` module exposes two factory functions. Choose the correct one based on the optimizer you are using.
+
+### `create_metrics_function()` — Returns `float`
+
+Used by **MIPROv2**, **COPRO**, **BootstrapFewShotWithRandomSearch**, and **SIMBA**. Wraps the DeepEval evaluation loop into a callable with the signature `(gold, pred, trace) -> float`. Scores from all five metrics are averaged into a single rounded float.
+
+The function extracts the following attributes from its arguments:
+- `gold.question` — the input question
+- `gold.answer` — the expected (gold) answer
+- `pred.answer` — the pipeline's predicted answer
+- `pred.retrieved_context` — the list of retrieved passages
+
+```python
+from dspy_opt.utils.metrics import create_metrics_function
+
+metrics_function = create_metrics_function(metrics)
+
+# Used directly as the optimizer metric
+optimizer = dspy.MIPROv2(
+    metric=metrics_function,
+    max_bootstrapped_demos=3,
+    max_labeled_demos=16,
+    auto="medium",
+)
+```
+
+Internally, the function builds a `LLMTestCase`, calls `deepeval.evaluate()` with `run_async=False` and `throttle_value=60`, then aggregates:
+
+```python
+scores = {}
+for test_result in evaluation_result.test_results:
+    for metric_meta in test_result.metrics_data:
+        scores[metric_meta.name] = metric_meta.score
+
+return round(sum(scores.values()) / len(scores), 2) if scores else 0.0
+```
+
+### `create_gepa_metrics_function()` — Returns `dspy.Prediction`
+
+Used exclusively by **GEPA**. Returns a `dspy.Prediction(score=..., feedback=...)` where `score` is the same averaged float and `feedback` is a comma-separated string of `"<MetricName>: <score>"` pairs. GEPA's reflection LLM reads the `feedback` string to identify which metrics are underperforming and proposes targeted instruction improvements.
+
+```python
+from dspy_opt.utils.metrics import create_gepa_metrics_function
+
+gepa_metrics_function = create_gepa_metrics_function(metrics)
+
+# Returns dspy.Prediction(score=0.72, feedback="Answer Relevancy: 0.85, Faithfulness: 0.60, ...")
+optimizer = dspy.GEPA(
+    metric=gepa_metrics_function,
+    reflection_lm=reflection_lm,
+    max_full_evals=10,
+    reflection_minibatch_size=3,
+    candidate_selection_strategy="pareto",
+    use_merge=True,
+)
+```
+
+<Note>
+  Even when using GEPA during optimization, you should use the standard `create_metrics_function()` for **final evaluation** with `dspy.Evaluate`. The GEPA-specific variant's `dspy.Prediction` return type is not compatible with `dspy.Evaluate`'s aggregation logic.
+</Note>
+
+## Score Aggregation
+
+Both functions aggregate metric scores identically: each metric contributes one score in `[0, 1]`, all scores are summed and divided by the total count, and the result is rounded to two decimal places. A pipeline with no retrieved context or an evaluation error returns `0.0`.
+
+```python
+# Aggregate scores (same logic in both factory functions)
+avg_score = round(sum(scores.values()) / len(scores), 2) if scores else 0.0
+```
+
+The per-metric scores are printed to stdout during each evaluation call:
+
+```
+Answer Relevancy: 0.85
+Faithfulness: 0.72
+Contextual Precision: 0.68
+Contextual Recall: 0.61
+Contextual Relevancy: 0.74
+```
+
+## Confident AI Tracing
+
+During optimization runs, metrics and traces can be logged to [Confident AI](https://www.confident-ai.com/) for centralized tracking and visualization. To enable tracing, add your Confident AI API key to a `.env.local` file in the project root:
+
+```bash
+# .env.local
+API_KEY=your_confident_ai_api_key
+```
+
+<Tip>
+  Confident AI tracing is purely additive — the pipeline and optimizer work identically whether or not the API key is present. Remove or omit `.env.local` to run without remote logging.
+</Tip>
+
+## Evaluation Script Pattern
+
+After optimization, load the saved pipeline state and evaluate it on the held-out test set using `dspy.Evaluate`:
+
+```python
+import dspy
+import yaml
+import os
+from dotenv import load_dotenv
+
+from dspy_opt.freshqa.freshqa_rag_module import FreshQARAG
+from dspy_opt.utils.metrics import create_metrics_function
+
+load_dotenv()
+
+with open("freshqa_rag_mipro_config.yml", "r") as f:
+    config = yaml.safe_load(f)
+
+# Re-initialize the pipeline (same construction as during optimization)
+rag_pipeline = FreshQARAG(
+    query_rewriter=query_rewriter,
+    sub_query_generator=sub_query_generator,
+    metadata_extractor=metadata_extractor,
+    metadata_schema=config["metadata_schema"],
+    weaviate_retriever=weaviate_retriever,
+    embedding_model=model,
+    top_k=config["rag_pipeline"]["top_k"],
+)
+
+# Load the optimized state
+rag_pipeline.load("optimized_rag_mipro.json")
+
+# Build the metric function
+metrics_function = create_metrics_function(metrics)
+
+# Evaluate on the test set
+evaluate = dspy.Evaluate(
+    devset=testset,
+    num_threads=config["evaluation"]["settings"]["num_threads"],
+    display_progress=config["evaluation"]["settings"]["display_progress"],
+    display_table=config["evaluation"]["settings"]["display_table"],
+    provide_traceback=config["evaluation"]["settings"]["provide_traceback"],
+)
+results = evaluate(rag_pipeline, metric=metrics_function)
+print(results)
+```
+
+To run the pre-built evaluation script for FreshQA:
+
+```bash
+cd src/dspy_opt/freshqa
+python freshqa_rag_evaluation.py
+```
+
+The evaluation script loads the pipeline state, runs predictions across the entire test set, and reports both per-example metric breakdowns and the aggregated score.
+
+## Expected Input/Output Schema
+
+The metric functions derive all needed information from the `gold` and `pred` objects produced during a `dspy.Evaluate` run:
+
+| Attribute | Source | Description |
+|-----------|--------|-------------|
+| `gold.question` | Training/test example | The original question text |
+| `gold.answer` | Training/test example | The expected reference answer |
+| `pred.answer` | Pipeline prediction | The pipeline's generated answer |
+| `pred.retrieved_context` | Pipeline prediction | List of retrieved passage strings |
+
+Examples are created from the dataset as:
+
+```python
+trainset = [
+    dspy.Example(question=question, answer=answer).with_inputs("question")
+    for question, answer in zip(dataset["train"]["question"], dataset["train"]["answer"])
+]
+```
+
+The `retrieved_context` field on `pred` is populated by `FreshQARAG.forward()` as the deduplicated list of passages returned from the `WeaviateRetriever` calls in stage 4 of the pipeline.

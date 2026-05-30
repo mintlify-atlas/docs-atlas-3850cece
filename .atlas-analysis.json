@@ -1,0 +1,92 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "DSPy-Opt",
+  "projectDescription": "Advanced RAG pipeline optimization framework that uses DSPy to automate prompt tuning and few-shot selection with MIPRO, COPRO, SIMBA, GEPA, and BootstrapFewShot optimizers across multiple QA datasets backed by Weaviate hybrid search.",
+  "theme": "luma",
+  "primaryColor": "#4595db",
+  "lightColor": "#5ebf9e",
+  "darkColor": "#7c7c7c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/pipeline-architecture",
+              "concepts/optimizers",
+              "concepts/evaluation"
+            ]
+          },
+          {
+            "group": "Pipeline Components",
+            "pages": [
+              "components/query-rewriter",
+              "components/sub-query-generator",
+              "components/metadata-extractor",
+              "components/weaviate-retriever",
+              "components/metrics"
+            ]
+          },
+          {
+            "group": "Dataset Pipelines",
+            "pages": [
+              "datasets/overview",
+              "datasets/freshqa",
+              "datasets/hotpotqa",
+              "datasets/pubmedqa",
+              "datasets/triviaqa",
+              "datasets/wikipedia"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/indexing",
+              "guides/running-optimizers",
+              "guides/configuration",
+              "guides/adding-a-dataset"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "5-stage modular RAG pipeline: Query Rewriting, Sub-Query Generation, Metadata Extraction, Hybrid Retrieval, Chain-of-Thought Answer Generation",
+    "5 DSPy optimizers: MIPROv2, COPRO, BootstrapFewShotWithRandomSearch, SIMBA, and GEPA",
+    "Weaviate hybrid search combining vector similarity and keyword filtering with structured metadata",
+    "DeepEval integration for 5 RAG metrics: Answer Relevancy, Faithfulness, Contextual Precision, Contextual Recall, Contextual Relevancy",
+    "YAML-driven configuration for all pipeline, model, and optimizer hyperparameters",
+    "5 benchmark datasets: FreshQA, HotpotQA, PubMedQA, TriviaQA, Wikipedia",
+    "Confident AI tracing and logging for optimization and evaluation runs",
+    "Extensible architecture for adding new datasets following the established pattern"
+  ],
+  "publicApiSurface": [
+    "QueryRewriter(use_chain_of_thought: bool = True) — dspy.Module for query optimization",
+    "QueryRewriter.forward(query: str) -> dspy.Prediction",
+    "QueryRewriter.batch_rewrite(queries: List[str]) -> List[str]",
+    "SubQueryGenerator(min_subqueries: int = 2, max_subqueries: int = 5) — dspy.Module for query decomposition",
+    "SubQueryGenerator.forward(query: str, num_subqueries: Optional[int] = None) -> dspy.Prediction",
+    "SubQueryGenerator.batch_generate(queries: List[str]) -> List[List[str]]",
+    "MetadataExtractor(extractor_llm: dspy.LM) — dspy.Module for structured metadata extraction",
+    "MetadataExtractor.forward(text: str, schema: Dict[str, Any]) -> Dict[str, Any]",
+    "MetadataExtractor.transform_documents(documents: List[dspy.Example], schema: Dict[str, Any]) -> List[dspy.Example]",
+    "WeaviateRetriever(weaviate_url, weaviate_api_key, collection_name, top_k, metadata_schema) — dspy.Module for hybrid search",
+    "WeaviateRetriever.forward(query, query_embedding, top_k, metadata) -> dspy.Prediction",
+    "create_metrics_function(metrics: List[BaseMetric]) -> Callable[[Any, Any], float]",
+    "create_gepa_metrics_function(metrics: List[BaseMetric]) -> Callable[..., dspy.Prediction]",
+    "FreshQARAG / HotpotQARAG / PubMedQARAG / TriviaQARAG / WikipediaRAG — dataset pipeline classes",
+    "freshqa_indexing.py / hotpotqa_indexing.py / ... — indexing scripts",
+    "freshqa_rag_mipro.py / freshqa_rag_copro.py / freshqa_rag_simba.py / freshqa_rag_gepa.py / freshqa_rag_bootstrap_few_shot.py — optimizer scripts"
+  ]
+}

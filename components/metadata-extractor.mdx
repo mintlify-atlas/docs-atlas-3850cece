@@ -1,0 +1,161 @@
+---
+title: "MetadataExtractor: Structured Metadata from Text"
+sidebarTitle: "MetadataExtractor"
+description: "MetadataExtractor uses an LLM with structured output to extract typed metadata fields from text according to a user-defined JSON schema, enabling precise retrieval filtering."
+---
+
+`MetadataExtractor` is a `dspy.Module` that reads arbitrary text and produces a structured dictionary of metadata fields according to a user-supplied JSON schema. The extracted metadata can annotate a document corpus for downstream filtering in `WeaviateRetriever`, or it can annotate query context so that retrieval is scoped to documents with matching attributes. The module uses a dedicated `extractor_llm` instance — separate from the main answer LLM — to keep extraction concerns isolated from the generation context.
+
+<Note>
+  A separate `extractor_llm` is passed at construction time rather than inherited from `dspy.settings`. This prevents the metadata extraction prompts and their outputs from appearing in the main LLM's context window, which could otherwise bias answer generation.
+</Note>
+
+## Signature
+
+The module is driven by `ExtractMetadataSignature`:
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | `InputField` | The input text to extract metadata from. The LLM must omit any field not explicitly mentioned in the text — no placeholders like `"Unknown"` or `"N/A"`, and no invented values. Only facts directly stated in the input are allowed. |
+| `metadata_schema` | `InputField` | JSON schema string defining the expected metadata structure. |
+| `metadata` | `OutputField` | JSON object containing only successfully extracted, non-null fields. |
+
+## Schema format
+
+The schema must be a Python `dict` with a top-level `"properties"` key. Each property entry contains `"type"` and an optional `"description"`:
+
+```python
+schema = {
+    "properties": {
+        "title": {"type": "string", "description": "The main title or name of the subject"},
+        "category": {"type": "string", "description": "Primary category or type of content"},
+        "year": {"type": "number", "description": "Publication year"},
+    }
+}
+```
+
+### Allowed types
+
+| JSON type | Python equivalent | Notes |
+|---|---|---|
+| `"string"` | `str` | Supports an optional `"enum"` list of valid values |
+| `"number"` | `float` / `int` | Numeric values only |
+| `"boolean"` | `bool` | `true` / `false` only |
+
+<Warning>
+  `"enum"` is only allowed on fields with `"type": "string"`. Specifying `"enum"` on a `"number"` or `"boolean"` field raises a `ValueError` during `validate_schema`.
+</Warning>
+
+## Constructor
+
+```python
+MetadataExtractor(extractor_llm: dspy.LM)
+```
+
+<ParamField path="extractor_llm" type="dspy.LM" required>
+  A fully initialized `dspy.LM` instance dedicated to metadata extraction. This LM is used inside a `dspy.context(lm=self.extractor_llm)` block so that extraction calls never touch `dspy.settings.lm`.
+</ParamField>
+
+## Methods
+
+### `forward`
+
+```python
+forward(text: str, schema: Dict[str, Any]) -> Dict[str, Any]
+```
+
+Extracts metadata from a single piece of text according to the schema. Only fields with non-null values are included in the returned dictionary. On any failure (JSON parse error, LLM error, schema validation error), returns an empty `{}` so the pipeline continues without crashing.
+
+<ParamField path="text" type="str" required>
+  The raw text from which metadata should be extracted.
+</ParamField>
+
+<ParamField path="schema" type="Dict[str, Any]" required>
+  A schema dict conforming to the format described above. Validated by `validate_schema` before the LLM call.
+</ParamField>
+
+**Returns:** `Dict[str, Any]` — a flat dictionary of successfully extracted, non-null metadata fields. Fields absent from the text are not included.
+
+---
+
+### `transform_documents`
+
+```python
+transform_documents(
+    documents: List[dspy.Example],
+    schema: Dict[str, Any],
+) -> List[dspy.Example]
+```
+
+Applies metadata extraction to an entire list of `dspy.Example` objects. For each document, the extracted metadata is merged into the existing `example.metadata` dict (extracted fields take precedence on key collisions). Returns a new list of `dspy.Example` objects with updated metadata and `"text"` as the designated input field.
+
+<ParamField path="documents" type="List[dspy.Example]" required>
+  List of `dspy.Example` objects, each expected to have a `text` attribute and a `metadata` dict attribute.
+</ParamField>
+
+<ParamField path="schema" type="Dict[str, Any]" required>
+  Schema applied uniformly to every document in the list.
+</ParamField>
+
+**Returns:** `List[dspy.Example]` — new list of examples with enriched metadata.
+
+---
+
+### `validate_schema`
+
+```python
+validate_schema(schema: Dict[str, Any]) -> None
+```
+
+Validates that the schema is well-formed before it is sent to the LLM. Raises `ValueError` with a descriptive message on any of the following violations:
+
+- Missing top-level `"properties"` key
+- A property uses a type other than `"string"`, `"number"`, or `"boolean"`
+- A non-string property includes an `"enum"` constraint
+
+## Usage
+
+```python
+import dspy
+from dspy_opt.utils.metadata_extractor import MetadataExtractor
+
+# Initialize a dedicated LM for extraction
+extractor_lm = dspy.LM(
+    "groq/llama-3.1-8b-instant",
+    api_key="your-groq-api-key",
+)
+
+extractor = MetadataExtractor(extractor_llm=extractor_lm)
+
+# Define what you want to extract
+schema = {
+    "properties": {
+        "title":    {"type": "string",  "description": "The main title or name of the subject"},
+        "category": {"type": "string",  "description": "Primary category or type of content"},
+        "year":     {"type": "number",  "description": "Publication year"},
+    }
+}
+
+# Extract from a single document
+text = "The 2021 Annual Report on Solar Energy covers global photovoltaic capacity trends."
+metadata = extractor(text=text, schema=schema)
+print(metadata)
+# {"title": "Annual Report on Solar Energy", "category": "Energy", "year": 2021}
+
+# Fields not mentioned in the text are omitted entirely
+sparse_text = "A brief note on cloud computing infrastructure."
+metadata = extractor(text=sparse_text, schema=schema)
+print(metadata)
+# {"category": "Technology"}   # year and title not found → omitted
+
+# Enrich a corpus of dspy.Examples
+documents = [
+    dspy.Example(text="...", metadata={}).with_inputs("text"),
+    dspy.Example(text="...", metadata={}).with_inputs("text"),
+]
+enriched = extractor.transform_documents(documents, schema)
+```
+
+<Tip>
+  When using `MetadataExtractor` to annotate query context for filtering, apply the same schema to both your document corpus (at index time) and to each incoming query (at retrieval time). This ensures the metadata keys align with what `WeaviateRetriever` expects in its `metadata_schema`.
+</Tip>

@@ -1,0 +1,326 @@
+---
+title: "Run DSPy Optimizers on RAG Pipelines"
+sidebarTitle: "Running Optimizers"
+description: "Run MIPROv2, COPRO, SIMBA, GEPA, or BootstrapFewShot optimization on any dataset pipeline and evaluate the compiled result with DeepEval metrics."
+---
+
+DSPy optimizers improve a RAG pipeline by automatically searching over the space of prompt instructions and few-shot demonstrations. Each optimizer script loads a YAML config, initialises all pipeline components, splits the HuggingFace dataset into train and test sets, runs the optimizer to produce a compiled program, saves the compiled state to a JSON file, and then evaluates it using `dspy.Evaluate` with DeepEval metrics. All scripts follow the same structure — only the optimizer class and its hyperparameters differ.
+
+<Note>
+  All optimizer scripts must be run from **inside the dataset directory** (e.g. `src/dspy_opt/freshqa/`). Config YAML files are opened with a relative path, so the working directory must match the script location.
+</Note>
+
+## What Happens During Optimization
+
+<Steps>
+
+  <Step title="Load the YAML config">
+    The script opens `<dataset>_rag_<optimizer>_config.yml` from the current directory. This single file controls every configurable aspect of the run — models, Weaviate connection, dataset coordinates, metric thresholds, optimizer hyperparameters, and evaluation settings.
+  </Step>
+
+  <Step title="Initialise LLMs, embedding model, and Weaviate retriever">
+    Two `dspy.LM` instances are created: an `answer_llm` configured as the default DSPy LM (`dspy.configure(lm=answer_llm)`), and a separate `extractor_llm` for metadata extraction. A `SentenceTransformer` embedding model and a `WeaviateRetriever` are also initialised from config values.
+  </Step>
+
+  <Step title="Load and split the dataset">
+    The dataset is fetched from HuggingFace and split into train and test sets using the `test_size` fraction from the config. Both sets are converted into `dspy.Example` objects with a `question` input field and a `answer` label field.
+
+    ```python
+    dataset = load_dataset(
+        config["dataset"]["name"],
+        config["dataset"]["subset"],
+        split=config["dataset"]["split"],
+    )
+    dataset = dataset.train_test_split(test_size=config["dataset"]["test_size"])
+    trainset = [
+        dspy.Example(question=question, answer=answer).with_inputs("question")
+        for question, answer in zip(dataset["train"]["question"], dataset["train"]["answer"])
+    ]
+    ```
+  </Step>
+
+  <Step title="Compile the pipeline with the optimizer">
+    The optimizer is instantiated with its hyperparameters from the config and `compile()` is called with the uninitialised RAG pipeline and the training set. The optimizer explores prompt variants and demo combinations, evaluating each using the DeepEval metrics function.
+
+    ```python
+    optimizer = dspy.MIPROv2(
+        metric=metrics_function,
+        max_bootstrapped_demos=config["optimizer"]["max_bootstrapped_demos"],
+        max_labeled_demos=config["optimizer"]["max_labeled_demos"],
+        auto=config["optimizer"]["auto"],
+    )
+    optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+    ```
+  </Step>
+
+  <Step title="Save the optimized pipeline">
+    The compiled program is saved to a JSON file in the current directory. This file captures all tuned instructions and selected few-shot demonstrations and can be reloaded without re-running optimization.
+
+    ```python
+    optimized_rag.save("optimized_rag_mipro.json")
+    ```
+  </Step>
+
+  <Step title="Evaluate on the test set">
+    `dspy.Evaluate` runs the compiled pipeline on the held-out test set across multiple threads, reporting per-example scores and an aggregate result using the same DeepEval metrics function.
+
+    ```python
+    evaluate = dspy.Evaluate(
+        devset=testset,
+        num_threads=config["evaluation"]["settings"]["num_threads"],
+        display_progress=config["evaluation"]["settings"]["display_progress"],
+        display_table=config["evaluation"]["settings"]["display_table"],
+        provide_traceback=config["evaluation"]["settings"]["provide_traceback"],
+    )
+    results = evaluate(optimized_rag, metric=metrics_function)
+    print(results)
+    ```
+  </Step>
+
+</Steps>
+
+## MIPROv2
+
+MIPROv2 jointly optimises prompt instructions and few-shot demonstrations using Bayesian search. It is the recommended general-purpose optimizer when sufficient search budget is available.
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_mipro.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_mipro.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_mipro.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_mipro.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_mipro.py
+```
+
+</CodeGroup>
+
+## COPRO
+
+COPRO performs instruction-only optimisation via coordinate ascent, proposing and evaluating instruction edits across a breadth/depth schedule. Use it when you want fast prompt-only gains.
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_copro.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_copro.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_copro.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_copro.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_copro.py
+```
+
+</CodeGroup>
+
+## BootstrapFewShot
+
+`BootstrapFewShotWithRandomSearch` focuses purely on few-shot demo selection. It bootstraps candidate demonstrations by running the pipeline on training examples, then runs random search over demo subsets. Useful as a baseline before joint optimization.
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_bootstrap_few_shot.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_bootstrap_few_shot.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_bootstrap_few_shot.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_bootstrap_few_shot.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_bootstrap_few_shot.py
+```
+
+</CodeGroup>
+
+## SIMBA
+
+SIMBA (Stochastic Introspective Mini-Batch Ascent) samples mini-batches from the training set, identifies challenging examples, and uses the LLM to generate self-reflective improvement rules or demonstrations. It is more efficient than full-eval search on larger training sets.
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_simba.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_simba.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_simba.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_simba.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_simba.py
+```
+
+</CodeGroup>
+
+## GEPA
+
+GEPA (Genetic-Pareto) evolves prompts using a reflection-driven loop. A separate reflection LLM analyses execution traces and textual feedback from the metric function, then proposes improved instructions. Candidates are managed via a Pareto frontier to balance exploration and retention.
+
+<Note>
+  GEPA requires `create_gepa_metrics_function()` instead of the standard `create_metrics_function()`. The GEPA metric function returns a `dspy.Prediction` containing both a numeric `score` and a per-metric `feedback` string. GEPA's reflection LLM consumes this textual feedback to diagnose failures and propose targeted prompt improvements. Additionally, a `reflection_llm` section is required in the GEPA config file.
+</Note>
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_gepa.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_gepa.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_gepa.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_gepa.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_gepa.py
+```
+
+</CodeGroup>
+
+## Standalone Evaluation
+
+After optimization, you can re-evaluate a saved pipeline state at any time without re-running the optimizer. The evaluation script loads the pipeline from the saved JSON, reconstitutes all components from the evaluation config, and runs `dspy.Evaluate` on the test set.
+
+<CodeGroup>
+
+```bash FreshQA
+cd src/dspy_opt/freshqa
+python freshqa_rag_evaluation.py
+```
+
+```bash HotpotQA
+cd src/dspy_opt/hotpotqa
+python hotpotqa_rag_evaluation.py
+```
+
+```bash PubMedQA
+cd src/dspy_opt/pubmedqa
+python pubmedqa_rag_evaluation.py
+```
+
+```bash TriviaQA
+cd src/dspy_opt/triviaqa
+python triviaqa_rag_evaluation.py
+```
+
+```bash Wikipedia
+cd src/dspy_opt/wikipedia
+python wikipedia_rag_evaluation.py
+```
+
+</CodeGroup>
+
+## Saving and Loading Compiled Pipelines
+
+Each optimizer script saves the compiled program to a JSON file immediately after optimization completes:
+
+```python
+# Save after optimization
+optimized_rag.save("optimized_rag_mipro.json")
+```
+
+To reload a previously compiled pipeline and skip re-optimization:
+
+```python
+import dspy
+from dspy_opt.freshqa.freshqa_rag_module import FreshQARAG
+
+# Reconstruct the uninitialised pipeline (same init args as during optimization)
+rag_pipeline = FreshQARAG(
+    query_rewriter=query_rewriter,
+    sub_query_generator=sub_query_generator,
+    metadata_extractor=metadata_extractor,
+    metadata_schema=metadata_schema,
+    weaviate_retriever=weaviate_retriever,
+    embedding_model=model,
+    top_k=5,
+)
+
+# Load the saved optimized state
+rag_pipeline.load("optimized_rag_mipro.json")
+
+# Run inference
+result = rag_pipeline(question="What is the capital of France?")
+print(result.answer)
+```
+
+## Optimizer Comparison
+
+| Optimizer | Script suffix | What it tunes | Key hyperparameters |
+|---|---|---|---|
+| MIPROv2 | `_mipro.py` | Instructions + few-shot (jointly) | `max_bootstrapped_demos`, `max_labeled_demos`, `auto` |
+| COPRO | `_copro.py` | Instructions only | `breadth`, `depth`, `init_temperature` |
+| BootstrapFewShot | `_bootstrap_few_shot.py` | Few-shot examples only | `max_bootstrapped_demos`, `max_labeled_demos`, `max_rounds` |
+| SIMBA | `_simba.py` | Rules + few-shot (mini-batch) | `bsize`, `num_candidates`, `max_steps`, `max_demos` |
+| GEPA | `_gepa.py` | Instructions + few-shot (reflective) | `max_full_evals`, `reflection_minibatch_size`, `candidate_selection_strategy`, `use_merge` |

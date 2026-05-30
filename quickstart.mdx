@@ -1,47 +1,158 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with DSPy-Opt in 5 Steps"
+sidebarTitle: "Quickstart"
+description: "Build and run an optimized FreshQA RAG pipeline with DSPy-Opt: install dependencies, configure Weaviate, index documents, and run MIPROv2 optimization."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through setting up a complete optimized FreshQA RAG pipeline from scratch. By the end you will have installed DSPy-Opt, connected it to a Weaviate cluster and a Groq-hosted LLM, indexed the FreshQA dataset, run the MIPROv2 optimizer to compile an improved pipeline, and evaluated the result using DeepEval metrics. All commands are run from the repository root unless otherwise noted.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  All optimization and evaluation scripts must be run from inside the relevant dataset directory — for example, `src/dspy_opt/freshqa/` — so that relative YAML config paths (such as `freshqa_rag_mipro_config.yml`) resolve correctly.
+</Note>
 
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Guided Setup
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Install uv and sync dependencies">
+    DSPy-Opt uses [uv](https://github.com/astral-sh/uv) for fast, reproducible dependency management. Install it with `pip`, then sync the full dependency tree including all extras and development tools:
 
     ```bash
-    npm install your-package
+    # Install uv
+    pip install uv
+
+    # Install all project dependencies and dev extras
+    uv sync --all-extras --dev
+
+    # Activate the virtual environment
+    source .venv/bin/activate
+    ```
+
+    The `--all-extras` flag installs optional dependency groups such as `sentence-transformers[onnx]`. The `--dev` flag adds the development toolchain (pytest, ruff, mypy, bandit, and so on). After activation, all subsequent commands run inside the isolated `.venv` environment.
+  </Step>
+
+  <Step title="Configure environment variables">
+    DSPy-Opt reads credentials from environment files at runtime. Create a `.env` file in the project root with your Weaviate cluster endpoint, Weaviate API key, and Groq API key:
+
+    ```env
+    WEAVIATE_URL=your_weaviate_cluster_url
+    WEAVIATE_API_KEY=your_weaviate_api_key
+    GROQ_API_KEY=your_groq_api_key
+    ```
+
+    To enable Confident AI tracing and logging of metric scores during optimization runs, create a separate `.env.local` file in the project root and add your Confident AI API key:
+
+    ```env
+    API_KEY=CONFIDENT_API_KEY
+    ```
+
+    The optimization scripts call `load_dotenv()` to load `.env` automatically. The `.env.local` file is picked up by the Confident AI SDK for trace ingestion.
+  </Step>
+
+  <Step title="Index the FreshQA dataset">
+    Before running a pipeline, you must populate your Weaviate collection. The indexing script loads the FreshQA dataset from Hugging Face, extracts structured metadata from each document using the extractor LLM, generates vector embeddings with `SentenceTransformer`, and stores documents, embeddings, and metadata in Weaviate.
+
+    ```bash
+    cd src/dspy_opt/freshqa
+    python freshqa_indexing.py
+    ```
+
+    Indexing configuration (embedding model, Weaviate collection name, metadata schema, and dataset split) is controlled by `freshqa_indexing_config.yml` in the same directory.
+  </Step>
+
+  <Step title="Run MIPROv2 optimization">
+    With the collection populated, run the MIPROv2 optimization script. It reads `freshqa_rag_mipro_config.yml`, initializes all pipeline components, loads the training split of FreshQA, runs `dspy.MIPROv2` to compile an optimized set of prompts and few-shot demonstrations, and saves the compiled pipeline to `optimized_rag_mipro.json`.
+
+    ```bash
+    python freshqa_rag_mipro.py
+    ```
+
+    The default config uses `groq/qwen3-32b` as the answer LLM, `groq/llama-3.3-70b-versatile` as the extractor LLM, `Qwen/Qwen3-Embedding-0.6B` as the embedding model, and MIPROv2 settings of `max_bootstrapped_demos: 3`, `max_labeled_demos: 16`, and `auto: "medium"`.
+
+    Other optimizer scripts follow the same pattern from the same directory:
+
+    ```bash
+    # SIMBA optimizer
+    python freshqa_rag_simba.py
+
+    # GEPA optimizer
+    python freshqa_rag_gepa.py
+
+    # COPRO optimizer
+    python freshqa_rag_copro.py
+
+    # BootstrapFewShot optimizer
+    python freshqa_rag_bootstrap_few_shot.py
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Evaluate the optimized pipeline">
+    After optimization completes, run the evaluation script to load the saved pipeline state, run predictions over the test split, compute all five DeepEval metrics (Answer Relevancy, Faithfulness, Contextual Precision, Contextual Recall, Contextual Relevancy), and print aggregated scores.
 
     ```bash
-    your-cli init
+    python freshqa_rag_evaluation.py
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
-    ```
+    Evaluation configuration is controlled by `freshqa_rag_evaluation_config.yml`. If Confident AI tracing is configured, per-run metric scores are logged automatically and can be viewed in the Confident AI dashboard.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Programmatic Usage
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+You can also build and run the FreshQA RAG pipeline directly in Python without the optimization scripts. The example below constructs a pipeline, passes a single question through all five stages, and prints the generated answer and reasoning.
+
+```python
+import dspy
+from sentence_transformers import SentenceTransformer
+
+from dspy_opt.freshqa.freshqa_rag_module import FreshQARAG
+from dspy_opt.utils.metadata_extractor import MetadataExtractor
+from dspy_opt.utils.query_rewriter import QueryRewriter
+from dspy_opt.utils.sub_query_generator import SubQueryGenerator
+from dspy_opt.utils.weaviate_retriever import WeaviateRetriever
+
+# Configure the LLMs
+answer_lm = dspy.LM("groq/qwen3-32b", api_key="your-groq-api-key")
+extractor_lm = dspy.LM("groq/llama-3.3-70b-versatile", api_key="your-groq-api-key")
+dspy.configure(lm=answer_lm)
+
+# Initialize shared components
+query_rewriter = QueryRewriter()
+sub_query_generator = SubQueryGenerator()
+metadata_extractor = MetadataExtractor(extractor_llm=extractor_lm)
+embedding_model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B")
+
+retriever = WeaviateRetriever(
+    weaviate_url="your-weaviate-url",
+    weaviate_api_key="your-weaviate-api-key",
+    collection_name="FreshQA",
+    top_k=5,
+)
+
+metadata_schema = {
+    "properties": {
+        "title": {"type": "string", "description": "The main title or name of the subject"},
+        "category": {"type": "string", "description": "Primary category or type of content"},
+    }
+}
+
+# Build and run the pipeline
+pipeline = FreshQARAG(
+    query_rewriter=query_rewriter,
+    sub_query_generator=sub_query_generator,
+    metadata_extractor=metadata_extractor,
+    metadata_schema=metadata_schema,
+    weaviate_retriever=retriever,
+    embedding_model=embedding_model,
+    top_k=5,
+)
+
+result = pipeline("What is the capital of France?")
+print(result.answer)
+print(result.reasoning)
+```
+
+The `pipeline()` call returns a `dspy.Prediction` with the following fields: `question`, `rewritten_query`, `sub_queries`, `retrieved_context`, `answer`, and `reasoning`. Two separate LLM instances are used — `answer_lm` for query rewriting, sub-query generation, and answer generation, and `extractor_lm` for structured metadata extraction — because metadata extraction benefits from a model with strong instruction-following and JSON output capabilities.
+
+<Note>
+  All optimization scripts (`freshqa_rag_mipro.py`, `freshqa_rag_simba.py`, `freshqa_rag_gepa.py`, etc.) must be run from within their dataset directory — for example, `src/dspy_opt/freshqa/` — because they open their YAML config files using relative paths such as `open("freshqa_rag_mipro_config.yml", "r")`. Running them from the repository root will raise a `FileNotFoundError`.
+</Note>

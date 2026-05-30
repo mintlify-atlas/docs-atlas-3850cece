@@ -1,0 +1,114 @@
+---
+title: "Install and Configure DSPy-Opt"
+sidebarTitle: "Installation"
+description: "Install DSPy-Opt with uv, configure required environment variables for Weaviate and Groq, and set up optional Confident AI tracing for optimization runs."
+---
+
+DSPy-Opt requires Python 3.12 or later and uses [uv](https://github.com/astral-sh/uv) for dependency management. This page covers the full installation process: installing uv, syncing all dependencies, setting the required environment variables for Weaviate and Groq, and optionally configuring Confident AI tracing for optimization run logging.
+
+## Prerequisites
+
+Before installing DSPy-Opt, confirm that your environment meets the following requirements:
+
+- **Python ≥ 3.12** — required by the `requires-python = ">=3.12"` constraint in `pyproject.toml`. The repository also ships a `.python-version` file that pins the exact patch version used by the maintainers.
+- **uv** — the project's package and virtual environment manager. If you do not have uv installed, see the installation step below.
+- **Weaviate cluster** — a running Weaviate instance (Weaviate Cloud Service or self-hosted) with a reachable HTTP endpoint and a valid API key.
+- **Groq API key** — used to access Groq-hosted models (`groq/qwen3-32b`, `groq/llama-3.3-70b-versatile`) for answer generation and metadata extraction.
+
+<Note>
+  The repository includes a `.python-version` file that specifies the exact Python patch version the maintainers test against. If you use a Python version manager such as `pyenv` or `mise`, it will automatically pick up this file and activate the correct interpreter when you `cd` into the project root.
+</Note>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install uv">
+    uv provides fast dependency resolution, virtual environment creation, and lock-file management. Install it via `pip`:
+
+    ```bash
+    pip install uv
+    ```
+
+    uv is a single binary with no additional system dependencies. You can also install it via the official installer script — see the [uv documentation](https://github.com/astral-sh/uv) for platform-specific options.
+  </Step>
+
+  <Step title="Sync project dependencies">
+    Clone the repository and run `uv sync` to create a `.venv` virtual environment and install all dependencies, extras, and development tools in one step:
+
+    ```bash
+    uv sync --all-extras --dev
+    ```
+
+    The `--all-extras` flag installs optional dependency groups such as `sentence-transformers[onnx]`. The `--dev` flag adds the full development toolchain. uv reads `pyproject.toml` and the generated lock file to produce a fully reproducible install.
+  </Step>
+
+  <Step title="Activate the virtual environment">
+    After syncing, activate the `.venv` created by uv:
+
+    ```bash
+    source .venv/bin/activate
+    ```
+
+    All subsequent `python` and `pytest` invocations will use the isolated environment. Deactivate at any time with `deactivate`.
+  </Step>
+</Steps>
+
+<Tip>
+  Always work inside the uv-managed `.venv` virtual environment. Running scripts against your system Python or a different virtual environment may produce import errors or version conflicts, since DSPy-Opt's dependencies are pinned in the uv lock file.
+</Tip>
+
+## Core Dependencies
+
+The following packages are installed as direct runtime dependencies (from `pyproject.toml`):
+
+| Package | Role |
+|---|---|
+| `dspy` | Modular pipeline design, DSPy module definitions, and optimizer framework |
+| `datasets` | Loading QA datasets from Hugging Face (FreshQA, HotpotQA, PubMedQA, TriviaQA, Wikipedia) |
+| `weaviate-client` | Client for connecting to Weaviate Cloud clusters and performing hybrid search |
+| `deepeval` | Evaluation metrics: Answer Relevancy, Faithfulness, Contextual Precision, Contextual Recall, Contextual Relevancy |
+| `sentence-transformers[onnx]` | Embedding model (`Qwen/Qwen3-Embedding-0.6B`) for generating query and document vectors |
+| `groq` | Groq SDK used by `dspy.LM` to access Groq-hosted LLM endpoints |
+
+## Environment Variables
+
+DSPy-Opt reads credentials from a `.env` file in the project root via `python-dotenv`. Create this file before running any indexing, optimization, or evaluation scripts:
+
+```env
+WEAVIATE_URL=your_weaviate_cluster_url
+WEAVIATE_API_KEY=your_weaviate_api_key
+GROQ_API_KEY=your_groq_api_key
+```
+
+- `WEAVIATE_URL` — the full HTTP(S) endpoint of your Weaviate cluster (e.g., a Weaviate Cloud Service URL ending in `.weaviate.network`).
+- `WEAVIATE_API_KEY` — the API key used by `weaviate.connect_to_weaviate_cloud` to authenticate. The `WeaviateRetriever` raises a `ValueError` if either `WEAVIATE_URL` or `WEAVIATE_API_KEY` is unset.
+- `GROQ_API_KEY` — the Groq API key passed to `dspy.LM` for both the answer LLM (`groq/qwen3-32b`) and the extractor LLM (`groq/llama-3.3-70b-versatile`). All YAML configs reference this via `api_key_env: "GROQ_API_KEY"`.
+
+<Warning>
+  Never commit `.env` or `.env.local` to version control. Both files are expected to be listed in `.gitignore`. Exposing Weaviate or Groq credentials in a public repository will allow unauthorized access to your cluster and API quota.
+</Warning>
+
+## Optional: Confident AI Tracing
+
+DSPy-Opt integrates with [Confident AI](https://www.confident-ai.com/) for logging and tracing of metric scores across every evaluated candidate during optimization. To enable tracing, create a `.env.local` file in the project root and add your Confident AI API key:
+
+```env
+API_KEY=CONFIDENT_API_KEY
+```
+
+The Confident AI SDK reads `API_KEY` from this file automatically. Once configured, each optimization and evaluation run will stream per-candidate metric scores (Answer Relevancy, Faithfulness, Contextual Precision, Contextual Recall, Contextual Relevancy) to your Confident AI dashboard, giving you a full audit trail of the optimizer's search trajectory.
+
+## Makefile Targets
+
+The repository includes a `Makefile` with targets that wrap common development tasks. All targets assume the uv virtual environment is active:
+
+| Target | Description |
+|---|---|
+| `make sync` | Runs `uv sync --all-extras --dev` to update the environment from the lock file |
+| `make test` | Runs the full pytest test suite with coverage reporting |
+| `make lint-all` | Runs Ruff linting and formatting checks across all source files |
+| `make security` | Runs Bandit security scanning and `pip-audit` for known vulnerabilities |
+
+<Tip>
+  Run `make sync` after pulling updates from the repository to ensure your local environment stays in sync with any changes to `pyproject.toml` or the uv lock file.
+</Tip>

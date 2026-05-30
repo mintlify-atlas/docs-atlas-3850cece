@@ -1,20 +1,72 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "DSPy-Opt: Advanced RAG Pipeline Optimization"
+sidebarTitle: "Home"
+description: "Optimize RAG pipelines automatically using DSPy. Tune prompts and few-shot examples with MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot across five QA benchmarks."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+DSPy-Opt is a framework for building and automatically optimizing Retrieval-Augmented Generation (RAG) pipelines using [DSPy](https://dspy.ai/). It implements a modular 5-stage pipeline — query rewriting, sub-query decomposition, metadata extraction, hybrid Weaviate search, and chain-of-thought answer generation — and uses DSPy optimizers to automatically tune prompts and few-shot examples against [DeepEval](https://deepeval.com/) metrics.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and run your first optimized RAG pipeline in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up dependencies, environment variables, and Weaviate
+  </Card>
+  <Card title="Pipeline Architecture" icon="diagram-project" href="/concepts/pipeline-architecture">
+    Understand the 5-stage modular RAG pipeline design
+  </Card>
+  <Card title="Optimizers" icon="sliders" href="/concepts/optimizers">
+    Compare MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What DSPy-Opt Does
+
+DSPy-Opt replaces manual prompt engineering with automated optimization. Instead of hand-tuning prompts for each stage of your RAG pipeline, you define the pipeline structure once and let a DSPy optimizer search over instructions and few-shot demonstrations to maximize your evaluation metric.
+
+<CardGroup cols={3}>
+  <Card title="5 Optimizers" icon="wand-magic-sparkles">
+    MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot — each with a different search strategy
+  </Card>
+  <Card title="5 Datasets" icon="database">
+    FreshQA, HotpotQA, PubMedQA, TriviaQA, and Wikipedia — covering single-hop, multi-hop, and biomedical QA
+  </Card>
+  <Card title="5 Metrics" icon="chart-bar">
+    Answer Relevancy, Faithfulness, Contextual Precision, Recall, and Relevancy via DeepEval
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Index your dataset">
+    Load documents from HuggingFace, extract structured metadata with an LLM, embed with SentenceTransformers, and store in a Weaviate collection.
+  </Step>
+  <Step title="Configure your pipeline">
+    Set models, optimizer hyperparameters, and metadata schema in a YAML config file.
+  </Step>
+  <Step title="Run the optimizer">
+    The DSPy optimizer compiles your pipeline — searching over prompt instructions and few-shot examples — evaluated with DeepEval metrics.
+  </Step>
+  <Step title="Save and evaluate">
+    The optimized pipeline is saved to JSON. Run the evaluation script to measure performance across all DeepEval metrics.
+  </Step>
+</Steps>
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Pipeline Components" icon="puzzle-piece" href="/components/query-rewriter">
+    Detailed API reference for QueryRewriter, SubQueryGenerator, MetadataExtractor, WeaviateRetriever, and Metrics
+  </Card>
+  <Card title="Dataset Pipelines" icon="table" href="/datasets/overview">
+    Per-dataset pipeline classes, metadata schemas, and configuration for all five QA benchmarks
+  </Card>
+  <Card title="Running Optimizers" icon="play" href="/guides/running-optimizers">
+    Step-by-step guide to running each optimizer with the right configuration
+  </Card>
+  <Card title="Adding a Dataset" icon="plus" href="/guides/adding-a-dataset">
+    Extend DSPy-Opt to a new dataset by following the established pattern
+  </Card>
+</CardGroup>

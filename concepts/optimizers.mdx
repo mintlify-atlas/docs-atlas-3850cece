@@ -1,0 +1,275 @@
+---
+title: "DSPy Optimizers for RAG Pipelines"
+sidebarTitle: "Optimizers"
+description: "Compare MIPROv2, COPRO, BootstrapFewShotWithRandomSearch, SIMBA, and GEPA: what each tunes, its search strategy, and when to use it."
+---
+
+DSPy-Opt supports five optimizers that automatically improve the RAG pipeline by searching over **instructions** (the prompt text embedded in each DSPy module) and/or **few-shot demonstrations** (examples selected or bootstrapped from the training set). The optimization objective is always provided by the DeepEval metrics loop — every candidate program is scored against Answer Relevancy, Faithfulness, Contextual Precision, Contextual Recall, and Contextual Relevancy before the optimizer decides which direction to explore next. GEPA additionally requires a dedicated reflection LLM and a feedback-producing metric function that returns textual per-metric explanations alongside the numeric score.
+
+## Optimizer Comparison
+
+| Optimizer | What it tunes | Search strategy | Recommended for | Hyperparameters |
+|---|---|---|---|---|
+| **MIPROv2** | Instructions + Few-shot examples (jointly) | Bayesian optimization over candidate prompt/demo sets | Strong general-purpose default; sufficient search budget available | `max_bootstrapped_demos`, `max_labeled_demos`, `auto` |
+| **COPRO** | Instructions only | Coordinate ascent over instruction variants | Quick prompt-only gains; testing whether instruction tuning alone helps | `breadth`, `depth`, `init_temperature` |
+| **BootstrapFewShotWithRandomSearch** | Few-shot examples only | Random search over bootstrapped demo subsets | Measuring demo impact as a baseline before joint optimization | `max_bootstrapped_demos`, `max_labeled_demos`, `max_rounds` |
+| **SIMBA** | Rules/instructions + few-shot examples | Mini-batch iterative ascent with self-reflective rule generation | Efficient batch-based optimization on larger training sets | `bsize`, `num_candidates`, `max_steps`, `max_demos` |
+| **GEPA** | Instructions + few-shot examples (reflective evolution) | Pareto-based candidate selection with LLM reflection on failures | Reflection-driven improvements with multi-metric trade-offs | `max_full_evals`, `reflection_minibatch_size`, `candidate_selection_strategy`, `use_merge` |
+
+## Optimizer Details
+
+<Accordion title="MIPROv2 — Bayesian Joint Optimization">
+
+**MIPROv2** (Multiprompt Instruction PROposal Optimizer v2) jointly optimizes instructions and few-shot demonstrations using Bayesian search. It operates in three sequential stages:
+
+1. **Bootstrap demos** — runs the uncompiled pipeline on training examples and collects high-scoring traces as candidate demonstrations.
+2. **Propose instructions** — generates candidate instruction variants grounded in dataset summaries and code context.
+3. **Search combinations** — uses Bayesian optimization with mini-batch evaluation to efficiently explore the space of instruction/demo combinations, converging on the highest-scoring compiled program.
+
+MIPROv2 is the recommended starting point for most use cases. Set `auto="medium"` for a balanced budget, or `auto="light"` / `auto="heavy"` to trade speed against thoroughness.
+
+**Key parameters** (from `freshqa_rag_mipro_config.yml`):
+
+```yaml
+optimizer:
+  max_bootstrapped_demos: 3   # Max demos bootstrapped from training traces
+  max_labeled_demos: 16       # Max labeled demos to include
+  auto: "medium"              # Search budget: "light", "medium", or "heavy"
+```
+
+**Instantiation**:
+
+```python
+import dspy
+from dspy_opt.utils.metrics import create_metrics_function
+
+metrics_function = create_metrics_function(metrics)
+
+optimizer = dspy.MIPROv2(
+    metric=metrics_function,
+    max_bootstrapped_demos=config["optimizer"]["max_bootstrapped_demos"],
+    max_labeled_demos=config["optimizer"]["max_labeled_demos"],
+    auto=config["optimizer"]["auto"],
+)
+optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+optimized_rag.save("optimized_rag_mipro.json")
+```
+
+</Accordion>
+
+<Accordion title="COPRO — Coordinate Ascent Instruction Optimization">
+
+**COPRO** performs instruction-only optimization via coordinate ascent. It iteratively proposes instruction edits across a breadth/depth schedule, evaluates each variant against the metric, and keeps changes that improve performance. Instructions are optimized independently per DSPy module, making COPRO fast when few-shot selection is not required.
+
+Use COPRO when you want to measure how much instruction tuning alone can improve the pipeline before committing to a more expensive joint search.
+
+**Key parameters** (from `freshqa_rag_copro_config.yml`):
+
+```yaml
+optimizer:
+  breadth: 10          # Number of instruction candidates per step
+  depth: 3             # Number of optimization iterations per module
+  init_temperature: 1.4  # Sampling temperature for candidate generation
+```
+
+**Instantiation**:
+
+```python
+import dspy
+from dspy_opt.utils.metrics import create_metrics_function
+
+metrics_function = create_metrics_function(metrics)
+
+optimizer = dspy.COPRO(
+    metric=metrics_function,
+    breadth=config["optimizer"]["breadth"],
+    depth=config["optimizer"]["depth"],
+    init_temperature=config["optimizer"]["init_temperature"],
+)
+optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+optimized_rag.save("optimized_rag_copro.json")
+```
+
+</Accordion>
+
+<Accordion title="BootstrapFewShotWithRandomSearch — Demo Selection Baseline">
+
+**BootstrapFewShotWithRandomSearch** focuses purely on few-shot demonstration selection. It bootstraps candidate demonstrations by running the pipeline on training examples and filtering for high-scoring traces, then runs random search over demo subsets to find the combination that maximizes the metric. No instruction text is modified.
+
+This optimizer is the natural baseline to run before joint optimization — it quantifies how much of the potential gain comes from demonstrations alone versus from instruction tuning.
+
+**Key parameters** (from `freshqa_rag_bootstrap_few_shot_config.yml`):
+
+```yaml
+optimizer:
+  max_bootstrapped_demos: 3   # Max demos bootstrapped per module
+  max_labeled_demos: 16       # Max labeled demos to consider
+  max_rounds: 1               # Number of bootstrap rounds
+```
+
+**Instantiation**:
+
+```python
+import dspy
+from dspy_opt.utils.metrics import create_metrics_function
+
+metrics_function = create_metrics_function(metrics)
+
+optimizer = dspy.BootstrapFewShotWithRandomSearch(
+    metric=metrics_function,
+    max_bootstrapped_demos=config["optimizer"]["max_bootstrapped_demos"],
+    max_labeled_demos=config["optimizer"]["max_labeled_demos"],
+    max_rounds=config["optimizer"]["max_rounds"],
+)
+optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+optimized_rag.save("optimized_rag_bootstrap_few_shot.json")
+```
+
+</Accordion>
+
+<Accordion title="SIMBA — Stochastic Introspective Mini-Batch Ascent">
+
+**SIMBA** samples mini-batches from the training set, identifies challenging examples with high output variability, then uses the LLM to introspectively generate self-reflective improvement rules or add successful examples as demonstrations. This batch-based approach is more computationally efficient than full-evaluation search on larger training sets, since it never needs to score the entire training set in a single pass.
+
+SIMBA jointly tunes both rule-based instructions and few-shot demonstrations, making it a strong choice when the training set is large enough that MIPROv2's full-eval passes would be too slow.
+
+**Key parameters** (from `freshqa_rag_simba_config.yml`):
+
+```yaml
+optimizer:
+  bsize: 32           # Mini-batch size per optimization step
+  num_candidates: 6   # Number of candidate programs per step
+  max_steps: 8        # Total optimization steps
+  max_demos: 4        # Maximum demonstrations per module
+```
+
+**Instantiation**:
+
+```python
+import dspy
+from dspy_opt.utils.metrics import create_metrics_function
+
+metrics_function = create_metrics_function(metrics)
+
+optimizer = dspy.SIMBA(
+    metric=metrics_function,
+    bsize=config["optimizer"]["bsize"],
+    num_candidates=config["optimizer"]["num_candidates"],
+    max_steps=config["optimizer"]["max_steps"],
+    max_demos=config["optimizer"]["max_demos"],
+)
+optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+optimized_rag.save("optimized_rag_simba.json")
+```
+
+</Accordion>
+
+<Accordion title="GEPA — Genetic-Pareto Reflective Evolution">
+
+**GEPA** (Genetic-Pareto) evolves prompts using a reflection-driven loop. A separate **reflection LLM** — configured independently of the answer LLM — analyzes execution traces and the textual feedback produced by `create_gepa_metrics_function()`, then proposes improved instructions. Candidate programs are managed via a **Pareto frontier**: only programs that achieve the highest score on at least one training instance are retained, ensuring exploration of diverse strategies rather than convergence on a single local optimum. GEPA also supports candidate merging/crossover across lineages via `use_merge=True`.
+
+<Warning>
+  GEPA requires `create_gepa_metrics_function()` instead of `create_metrics_function()`. The GEPA metric function returns a `dspy.Prediction(score=..., feedback=...)` where `feedback` is a comma-separated string of per-metric name/score pairs. The reflection LLM reads this feedback to diagnose which metrics are failing and why.
+</Warning>
+
+**Key parameters** (from `freshqa_rag_gepa_config.yml`):
+
+```yaml
+reflection_llm:
+  model: "groq/qwen3-32b"
+  api_key_env: "GROQ_API_KEY"
+  temperature: 1.0
+  max_tokens: 32000
+
+optimizer:
+  max_full_evals: 10                        # Full training-set evaluations allowed
+  reflection_minibatch_size: 3              # Examples per reflection batch
+  candidate_selection_strategy: "pareto"   # Pareto frontier management
+  use_merge: true                           # Enable crossover between candidates
+  num_threads: 1
+  seed: 0
+```
+
+**Instantiation**:
+
+```python
+import dspy
+from dspy_opt.utils.metrics import create_gepa_metrics_function, create_metrics_function
+
+# GEPA metric function — returns score + feedback
+gepa_metrics_function = create_gepa_metrics_function(metrics)
+
+# Standard metric function — used for final evaluation only
+eval_metrics_function = create_metrics_function(metrics)
+
+# Reflection LLM — separate from the answer LLM
+reflection_lm = dspy.LM(
+    model=config["reflection_llm"]["model"],
+    api_key=os.getenv(config["reflection_llm"]["api_key_env"]),
+    temperature=config["reflection_llm"]["temperature"],
+    max_tokens=config["reflection_llm"]["max_tokens"],
+)
+
+optimizer = dspy.GEPA(
+    metric=gepa_metrics_function,
+    max_full_evals=config["optimizer"]["max_full_evals"],
+    reflection_minibatch_size=config["optimizer"]["reflection_minibatch_size"],
+    candidate_selection_strategy=config["optimizer"]["candidate_selection_strategy"],
+    reflection_lm=reflection_lm,
+    use_merge=config["optimizer"]["use_merge"],
+    num_threads=config["optimizer"]["num_threads"],
+    seed=config["optimizer"]["seed"],
+)
+optimized_rag = optimizer.compile(rag_pipeline, trainset=trainset)
+optimized_rag.save("optimized_rag_gepa.json")
+
+# Evaluate with the standard float-returning metric
+evaluate = dspy.Evaluate(devset=testset, num_threads=1, display_progress=True)
+results = evaluate(optimized_rag, metric=eval_metrics_function)
+```
+
+</Accordion>
+
+## Choosing an Optimizer
+
+<CardGroup cols={2}>
+  <Card title="MIPROv2" icon="chart-line">
+    **Best default choice.** Jointly tunes instructions and demonstrations via Bayesian search. Use when you have a moderate training set and want the strongest out-of-the-box results.
+  </Card>
+  <Card title="COPRO" icon="bolt">
+    **Fastest prompt-only gain.** Only modifies instruction text. Use when you want to quickly validate whether better prompts alone help before running a full joint search.
+  </Card>
+  <Card title="BootstrapFewShot" icon="database">
+    **Demonstration baseline.** Only selects few-shot examples. Run this first to understand how much demonstrations contribute before adding instruction optimization.
+  </Card>
+  <Card title="SIMBA" icon="layer-group">
+    **Efficient on large training sets.** Mini-batch iterative ascent avoids expensive full-eval passes. Use when the training set is too large for MIPROv2's per-candidate full evaluation.
+  </Card>
+  <Card title="GEPA" icon="dna">
+    **Multi-metric reflection.** Pareto-based evolution with an LLM reflection loop. Use when you want the optimizer to reason about *why* specific metrics are failing and adapt accordingly.
+  </Card>
+</CardGroup>
+
+## Running an Optimizer
+
+Each optimizer script follows the same pattern: load a YAML config, initialize components, build the pipeline, run `.compile()`, save the result, and evaluate on the test set.
+
+```bash
+# MIPROv2
+cd src/dspy_opt/freshqa
+python freshqa_rag_mipro.py
+
+# COPRO
+python freshqa_rag_copro.py
+
+# BootstrapFewShotWithRandomSearch
+python freshqa_rag_bootstrap_few_shot.py
+
+# SIMBA
+python freshqa_rag_simba.py
+
+# GEPA
+python freshqa_rag_gepa.py
+```
+
+Optimized programs are saved as JSON files (e.g., `optimized_rag_mipro.json`) and can be reloaded with `rag_pipeline.load("optimized_rag_mipro.json")` for inference or further evaluation.

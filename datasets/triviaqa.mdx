@@ -1,7 +1,7 @@
 ---
 title: "TriviaQA RAG Pipeline: Factoid and Trivia Questions"
 sidebarTitle: "TriviaQA"
-description: "The TriviaQA pipeline handles factoid and trivia question answering with typed metadata filtering, covering question-answer-evidence triples from trivia enthusiasts."
+description: "TriviaQA RAG pipeline answers factoid trivia questions with enum content_type and numeric year metadata fields for precise Weaviate evidence filtering."
 ---
 
 The TriviaQA pipeline targets the [TriviaQA](https://huggingface.co/datasets/mandarjoshi/trivia_qa) benchmark, a reading comprehension dataset composed of question-answer-evidence triples written by trivia enthusiasts. Each question is paired with independently gathered evidence documents from Wikipedia and the web, covering a wide variety of content types — from music lyrics and airline reviews to historical date records and news articles. The pipeline captures this content diversity through a typed metadata schema that includes an enum-constrained `content_type` field and a numeric `year` field for temporal filtering.

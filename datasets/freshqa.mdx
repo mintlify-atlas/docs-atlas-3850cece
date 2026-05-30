@@ -1,7 +1,7 @@
 ---
 title: "FreshQA RAG Pipeline: Single-Hop and False-Premise QA"
 sidebarTitle: "FreshQA"
-description: "The FreshQA pipeline uses the SealQA dataset for dynamic single-hop question answering and false-premise debunking, with title and category metadata filtering."
+description: "FreshQA RAG pipeline uses SealQA longseal for single-hop QA and false-premise debunking with title and category metadata-filtered Weaviate retrieval."
 ---
 
 The FreshQA pipeline targets the [SealQA](https://huggingface.co/datasets/vtllms/sealqa) benchmark, a dynamic QA dataset that mixes standard single-hop factoid questions with questions that contain hidden false premises — requiring the model to both retrieve relevant evidence and actively debunk incorrect assumptions. The pipeline stores documents in a `FreshQA` Weaviate collection and uses lightweight `title` / `category` metadata to sharpen retrieval filters before hybrid search.

@@ -1,7 +1,7 @@
 ---
-title: "Evaluating RAG Pipelines with DeepEval"
+title: "DeepEval Metrics for DSPy-Opt RAG Pipeline Evaluation"
 sidebarTitle: "Evaluation"
-description: "DSPy-Opt uses DeepEval metrics — Answer Relevancy, Faithfulness, Contextual Precision, Recall, and Relevancy — as the optimization objective and final evaluation measure."
+description: "DSPy-Opt evaluates RAG quality with five DeepEval metrics — Answer Relevancy, Faithfulness, and Contextual Precision, Recall, and Relevancy."
 ---
 
 DSPy-Opt integrates [DeepEval](https://deepeval.com/) as both the optimization objective and the final evaluation harness. Every candidate program explored by an optimizer is scored using the same five DeepEval metrics that are used to measure the finished pipeline — ensuring the optimization target and the reporting metric are identical. The `metrics.py` module provides two factory functions that wrap DeepEval's evaluation loop into DSPy-compatible callables: one that returns a plain float (for most optimizers) and one that returns a `dspy.Prediction` with score and feedback fields (for GEPA's reflection loop).

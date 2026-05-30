@@ -1,7 +1,7 @@
 ---
 title: "DeepEval Metrics Integration for DSPy Optimization"
 sidebarTitle: "Metrics"
-description: "The metrics module wraps DeepEval evaluation metrics into DSPy-compatible functions for use as optimization objectives with MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot."
+description: "Wraps DeepEval evaluation metrics into DSPy-compatible callables for use as optimization objectives with MIPROv2, COPRO, SIMBA, GEPA, and BootstrapFewShot."
 ---
 
 The `metrics` module bridges the [DeepEval](https://deepeval.com/) evaluation library and the DSPy optimizer loop. DSPy optimizers require a callable metric function with a specific signature; DeepEval provides rich, LLM-graded RAG metrics. This module provides two factory functions that wrap any list of `BaseMetric` instances into the exact shape each optimizer expects — one returning a plain `float` for most optimizers and one returning a `dspy.Prediction` with score and feedback text for GEPA.

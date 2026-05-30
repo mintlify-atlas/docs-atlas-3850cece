@@ -1,7 +1,7 @@
 ---
-title: "SubQueryGenerator: Decompose Complex Queries"
+title: "SubQueryGenerator: Split Complex Queries for Retrieval"
 sidebarTitle: "SubQueryGenerator"
-description: "SubQueryGenerator splits complex user queries into 2–5 focused sub-queries for parallel retrieval, automatically determining decomposition depth from query complexity."
+description: "SubQueryGenerator splits complex queries into targeted sub-queries, inferring depth via heuristics and recovering gracefully on LLM parse failure."
 ---
 
 `SubQueryGenerator` is a `dspy.Module` that tackles multi-faceted questions by splitting them into several focused sub-queries, each designed for independent retrieval execution. Rather than sending a long, ambiguous question directly to the search layer, the generator identifies distinct aspects, comparisons, and constraints within the original query and produces a JSON array of targeted sub-queries — one for each retrievable concept. The module automatically estimates how many sub-queries are needed based on linguistic heuristics and then uses `dspy.ChainOfThought` to produce them.

@@ -1,7 +1,7 @@
 ---
-title: "Index Dataset Documents into Weaviate"
+title: "Index QA Dataset Documents into a Weaviate Collection"
 sidebarTitle: "Indexing"
-description: "Load a HuggingFace QA dataset, extract structured metadata with an LLM, generate embeddings with SentenceTransformers, and store documents in a Weaviate collection."
+description: "Load a HuggingFace QA dataset, extract metadata with an LLM, generate embeddings with SentenceTransformer, and store them in Weaviate."
 ---
 
 The indexing pipeline prepares your dataset for retrieval by loading raw documents from HuggingFace, enriching each document with structured metadata extracted by an LLM, encoding the texts into dense vector embeddings using a SentenceTransformer model, and writing the resulting objects into a Weaviate collection. Every subsequent RAG pipeline query runs against this pre-built collection, so indexing is a required one-time setup step before running any optimizer or evaluation script.
@@ -31,6 +31,16 @@ GROQ_API_KEY=your_groq_api_key
     ```python
     with open("freshqa_indexing_config.yml", "r") as f:
         config = yaml.safe_load(f)
+    ```
+  </Step>
+
+  <Step title="Load environment variables">
+    `load_dotenv()` is called immediately after the config is parsed. This reads `WEAVIATE_URL`, `WEAVIATE_API_KEY`, and `GROQ_API_KEY` from the `.env` file in the project root and makes them available via `os.getenv()` for the rest of the script.
+
+    ```python
+    load_dotenv()
+    WEAVIATE_URL = os.getenv("WEAVIATE_URL")
+    WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
     ```
   </Step>
 

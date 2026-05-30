@@ -1,5 +1,5 @@
 ---
-title: "Install and Configure DSPy-Opt"
+title: "Install and Configure DSPy-Opt for Local Development"
 sidebarTitle: "Installation"
 description: "Install DSPy-Opt with uv, configure required environment variables for Weaviate and Groq, and set up optional Confident AI tracing for optimization runs."
 ---
@@ -104,8 +104,8 @@ The repository includes a `Makefile` with targets that wrap common development t
 
 | Target | Description |
 |---|---|
-| `make sync` | Runs `uv sync --all-extras --dev` to update the environment from the lock file |
-| `make test` | Runs the full pytest test suite with coverage reporting |
+| `make sync` | Runs `uv sync --all-groups` to update the environment from the lock file |
+| `make test` | Runs the full pytest test suite (excluding integration tests) |
 | `make lint-all` | Runs Ruff linting and formatting checks across all source files |
 | `make security` | Runs Bandit security scanning and `pip-audit` for known vulnerabilities |
 

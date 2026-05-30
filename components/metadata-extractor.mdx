@@ -1,7 +1,7 @@
 ---
-title: "MetadataExtractor: Structured Metadata from Text"
+title: "MetadataExtractor: Extract Typed Metadata from Documents"
 sidebarTitle: "MetadataExtractor"
-description: "MetadataExtractor uses an LLM with structured output to extract typed metadata fields from text according to a user-defined JSON schema, enabling precise retrieval filtering."
+description: "MetadataExtractor uses a dedicated LLM to pull typed metadata fields from text per a JSON schema, returning only validated non-null values for filtering."
 ---
 
 `MetadataExtractor` is a `dspy.Module` that reads arbitrary text and produces a structured dictionary of metadata fields according to a user-supplied JSON schema. The extracted metadata can annotate a document corpus for downstream filtering in `WeaviateRetriever`, or it can annotate query context so that retrieval is scoped to documents with matching attributes. The module uses a dedicated `extractor_llm` instance — separate from the main answer LLM — to keep extraction concerns isolated from the generation context.
@@ -64,7 +64,7 @@ MetadataExtractor(extractor_llm: dspy.LM)
 forward(text: str, schema: Dict[str, Any]) -> Dict[str, Any]
 ```
 
-Extracts metadata from a single piece of text according to the schema. Only fields with non-null values are included in the returned dictionary. On any failure (JSON parse error, LLM error, schema validation error), returns an empty `{}` so the pipeline continues without crashing.
+Extracts metadata from a single piece of text according to the schema. Calls `validate_schema` first — a malformed schema raises `ValueError` immediately before any LLM call. For failures that occur after validation (JSON parse errors, LLM errors), returns an empty `{}` so the pipeline continues without crashing. Only fields with non-null values are included in the returned dictionary.
 
 <ParamField path="text" type="str" required>
   The raw text from which metadata should be extracted.

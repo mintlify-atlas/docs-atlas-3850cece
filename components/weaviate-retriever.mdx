@@ -1,7 +1,7 @@
 ---
 title: "WeaviateRetriever: Hybrid Search with Metadata Filtering"
 sidebarTitle: "WeaviateRetriever"
-description: "WeaviateRetriever performs hybrid vector and keyword search against a Weaviate collection, with optional metadata filtering built from extracted schema fields."
+description: "WeaviateRetriever runs hybrid vector and keyword search against a Weaviate collection with optional metadata filtering built from extracted schema fields."
 ---
 
 `WeaviateRetriever` is a `dspy.Module` that connects to a Weaviate Cloud cluster and executes hybrid search — combining dense vector similarity with sparse keyword matching — against a named collection. It accepts an optional precomputed query embedding for the vector leg, and an optional metadata dictionary (produced by `MetadataExtractor`) that is automatically converted into Weaviate property filters. The result is a `dspy.Prediction` containing a ranked list of passage strings ready for the answer generation step.
@@ -130,7 +130,7 @@ from dspy_opt.utils.weaviate_retriever import WeaviateRetriever
 retriever = WeaviateRetriever(
     weaviate_url="https://your-cluster.weaviate.cloud",
     weaviate_api_key="your-api-key",
-    collection_name="FreshQA",
+    collection_name="TriviaQA",
     top_k=5,
     metadata_schema={"category": str, "title": str},
 )

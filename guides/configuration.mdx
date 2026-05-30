@@ -1,7 +1,7 @@
 ---
-title: "Configure Pipelines with YAML"
+title: "Configure DSPy-Opt RAG Pipelines Using YAML Config Files"
 sidebarTitle: "Configuration"
-description: "Every DSPy-Opt pipeline is driven by YAML config files — set models, embedding, Weaviate, metadata schema, optimizer hyperparameters, and evaluation thresholds without code changes."
+description: "DSPy-Opt reads all settings from YAML files — switch models, tune optimizer hyperparameters, and adjust evaluation thresholds without any code changes."
 ---
 
 Every script in DSPy-Opt — indexing, optimization, and evaluation — reads all of its settings from a YAML file at startup. No code changes are needed to switch models, adjust optimizer hyperparameters, change metric thresholds, or point at a different dataset. There are two categories of config file: the **indexing config** (used by `<dataset>_indexing.py`) and the **optimizer/evaluation config** (used by all optimizer scripts and the evaluation script, which share the same structure).
@@ -118,7 +118,6 @@ dataset:
   name: "vtllms/sealqa"
   subset: "longseal"
   split: "test"
-  test_size: 0.2   # fraction held out as test set
 
 # Evaluation configuration — shared by both the optimizer and the evaluation script.
 evaluation:
@@ -171,7 +170,7 @@ optimizer:
 | `weaviate` | `url_env`, `api_key_env`, `collection_name`, `top_k` | Weaviate connection settings; URL and API key are read from env |
 | `rag_pipeline` | `top_k` | Passages retrieved per query in the pipeline `forward()` call |
 | `metadata_schema` | `properties` | Must match the schema used during indexing |
-| `dataset` | `name`, `subset`, `split`, `test_size` | HuggingFace dataset and train/test split fraction |
+| `dataset` | `name`, `subset`, `split` | HuggingFace dataset identifier and split to load |
 | `evaluation.evaluator_llm` | `model`, `api_key_env`, `base_url` | DeepEval judge LLM; must expose an OpenAI-compatible endpoint |
 | `evaluation.metrics` | per-metric `threshold`, `async_mode` | Threshold above which a metric is considered passing |
 | `evaluation.settings` | `num_threads`, `display_progress`, `display_table`, `provide_traceback` | `dspy.Evaluate` runtime settings |

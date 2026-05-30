@@ -1,7 +1,7 @@
 ---
-title: "HotpotQA RAG Pipeline: Multi-Hop Reasoning"
+title: "HotpotQA RAG Pipeline: Multi-Hop Reasoning over Distractors"
 sidebarTitle: "HotpotQA"
-description: "The HotpotQA pipeline handles multi-hop reasoning questions requiring evidence from multiple documents, using entity and relation metadata for precise retrieval."
+description: "HotpotQA RAG pipeline chains evidence across distractor documents for multi-hop QA with title and category metadata filters and sub-query decomposition."
 ---
 
 The HotpotQA pipeline is built for questions that cannot be answered from a single passage — each question requires chaining evidence across two or more documents. The pipeline uses the `distractor` subset of [HotpotQA](https://huggingface.co/datasets/hotpotqa/hotpot_qa), which interleaves the relevant supporting paragraphs with distractor passages, making both retrieval precision and multi-hop reasoning critical. Documents are indexed into a `HotpotQA` Weaviate collection with `title` and `category` metadata to guide the hybrid search filter step.

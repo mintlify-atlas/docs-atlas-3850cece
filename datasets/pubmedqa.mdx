@@ -1,7 +1,7 @@
 ---
 title: "PubMedQA RAG Pipeline: Biomedical Question Answering"
 sidebarTitle: "PubMedQA"
-description: "The PubMedQA pipeline answers biomedical questions from PubMed abstracts, using medical domain metadata filtering for high-precision retrieval from scientific literature."
+description: "PubMedQA RAG pipeline answers biomedical questions from PubMed abstracts using a six-field metadata schema for disease, species, and study type filtering."
 ---
 
 The PubMedQA pipeline targets the [PubMedQA](https://huggingface.co/datasets/qiaojin/PubMedQA) benchmark, a biomedical question answering dataset built from PubMed research abstracts. Each question requires reasoning over dense scientific text involving diseases, biological entities, study designs, and experimental findings. The pipeline uses a rich six-field metadata schema — covering conditions, biological entities, species, study type, findings, and effect direction — to give the `WeaviateRetriever` highly specific filter predicates, substantially narrowing the candidate set before hybrid search ranks results.

@@ -1,7 +1,7 @@
 ---
-title: "DSPy-Opt: Automated RAG Pipeline Optimization"
+title: "DSPy-Opt: Automated RAG Pipeline Optimization with DSPy"
 sidebarTitle: "Introduction"
-description: "DSPy-Opt automates RAG pipeline optimization using DSPy optimizers — tune prompts and few-shot examples against DeepEval metrics across five QA benchmarks."
+description: "DSPy-Opt automates RAG pipeline optimization using DSPy optimizers — tune prompts and few-shot examples against DeepEval metrics on five QA benchmarks."
 ---
 
 DSPy-Opt is a framework for building and automatically optimizing Retrieval-Augmented Generation (RAG) pipelines across diverse question answering datasets. Rather than relying on manual prompt engineering — a brittle, time-consuming process that doesn't generalize across models or tasks — DSPy-Opt uses DSPy optimizers to automatically search over prompt instructions and few-shot demonstrations, evaluating each candidate against rigorous DeepEval metrics and converging on a high-scoring compiled pipeline. The result is a reproducible, measurable optimization loop that replaces guesswork with systematic search.
@@ -53,13 +53,13 @@ DSPy-Opt ships optimization scripts for five DSPy optimizers, each targeting a d
 
 DSPy-Opt provides complete pipeline implementations — indexing, optimization, and evaluation scripts — for five QA datasets spanning a range of question types and retrieval challenges.
 
-| Dataset | Complexity Type | Description |
-|---|---|---|
-| **FreshQA** (SealQA) | Single-hop | Dynamic QA benchmark with diverse question types and false-premise debunking |
-| **HotpotQA** | Multi-hop | Multi-hop questions with strong supervision for supporting facts |
-| **PubMedQA** | Biomedical | Biomedical QA derived from PubMed abstracts |
-| **TriviaQA** | Trivia / factoid | Question-answer-evidence triples authored by trivia enthusiasts |
-| **Wikipedia** | General knowledge | Large-scale Wikipedia articles paired with WikiQA question-answer pairs |
+| Dataset | HuggingFace | Complexity Type | Description |
+|---|---|---|---|
+| **FreshQA** (SealQA) | [vtllms/sealqa](https://huggingface.co/datasets/vtllms/sealqa) | Single-hop | Dynamic QA benchmark with diverse question types and false-premise debunking |
+| **HotpotQA** | [hotpotqa/hotpot_qa](https://huggingface.co/datasets/hotpotqa/hotpot_qa) | Multi-hop | Multi-hop questions with strong supervision for supporting facts |
+| **PubMedQA** | [qiaojin/PubMedQA](https://huggingface.co/datasets/qiaojin/PubMedQA) | Biomedical | Biomedical QA derived from PubMed abstracts |
+| **TriviaQA** | [mandarjoshi/trivia_qa](https://huggingface.co/datasets/mandarjoshi/trivia_qa) | Trivia / factoid | Question-answer-evidence triples authored by trivia enthusiasts |
+| **Wikipedia** | [wikimedia/wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) | General knowledge | Large-scale Wikipedia articles paired with WikiQA question-answer pairs |
 
 ## Evaluation Stack
 

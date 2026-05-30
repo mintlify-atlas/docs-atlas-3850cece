@@ -1,7 +1,7 @@
 ---
-title: "RAG Pipeline Architecture in DSPy-Opt"
+title: "RAG Pipeline Architecture: DSPy-Opt Five-Stage Design"
 sidebarTitle: "Pipeline Architecture"
-description: "DSPy-Opt's 5-stage RAG pipeline: query rewriting, sub-query decomposition, metadata extraction, hybrid Weaviate retrieval, and chain-of-thought answer generation."
+description: "DSPy-Opt's RAG pipeline runs five sequential stages — query rewriting, sub-query decomposition, metadata extraction, retrieval, and answer generation."
 ---
 
 DSPy-Opt organizes retrieval-augmented generation as a deterministic five-stage pipeline. Each stage is a composable DSPy module with learnable prompts, meaning optimizers can tune stages 1, 2, 3, and 5 automatically — improving retrieval quality and answer accuracy without manual prompt engineering. The pipeline accepts a plain-text question and returns a structured prediction containing the final answer, the chain-of-thought reasoning, the rewritten query, the generated sub-queries, and the full list of retrieved passages.

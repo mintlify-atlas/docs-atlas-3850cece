@@ -1,7 +1,7 @@
 ---
-title: "Add a New Dataset to DSPy-Opt"
+title: "Extend DSPy-Opt by Adding a New QA Dataset Pipeline"
 sidebarTitle: "Adding a Dataset"
-description: "Extend DSPy-Opt to a new QA dataset by creating an indexing pipeline, RAG module, optimizer scripts, and config files following the established directory pattern."
+description: "Extend DSPy-Opt to a new QA dataset by writing an indexing script, a RAG pipeline module, per-optimizer scripts, and YAML config files."
 ---
 
 DSPy-Opt is designed to be extended. Every dataset lives in its own self-contained subdirectory under `src/dspy_opt/` and follows a consistent file naming convention. Adding a new dataset means creating that directory, wiring up the shared utilities from `dspy_opt/utils/`, and providing YAML config files for each step. The FreshQA pipeline is the canonical reference — when in doubt, open a FreshQA file and adapt it.
